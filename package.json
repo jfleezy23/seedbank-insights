@@ -1,0 +1,78 @@
+{
+  "name": "seedbank-insights",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Desktop insight UI for PSU-style seed bank propagation spreadsheets.",
+  "main": "dist-electron/electron/main/main.js",
+  "author": "AG Insights",
+  "license": "UNLICENSED",
+  "scripts": {
+    "dev": "pnpm run build:electron && concurrently -k -n vite,electron -c green,cyan \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && electron dist-electron/electron/main/main.js\"",
+    "build": "pnpm run typecheck && pnpm run build:renderer && pnpm run build:electron",
+    "build:renderer": "vite build",
+    "build:electron": "tsc -p tsconfig.electron.json",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:ui": "playwright test",
+    "sca": "node scripts/run-sca.mjs",
+    "icons": "node scripts/generate-icons.mjs",
+    "db:smoke": "pnpm run build:electron && electron scripts/electron-db-smoke.cjs",
+    "app:build": "pnpm run build && electron-builder --dir",
+    "app:smoke": "node scripts/packaged-launch-smoke.mjs",
+    "postinstall": "electron-builder install-app-deps"
+  },
+  "dependencies": {
+    "@tanstack/react-table": "^8.21.3",
+    "better-sqlite3": "^12.11.1",
+    "exceljs": "^4.4.0",
+    "lucide-react": "^1.23.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.61.1",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^26.1.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.3",
+    "concurrently": "^9.1.0",
+    "electron": "^43.0.0",
+    "electron-builder": "^26.15.3",
+    "jsdom": "^29.1.1",
+    "playwright": "^1.61.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.1.3",
+    "vitest": "^4.1.9",
+    "wait-on": "^8.0.1"
+  },
+  "build": {
+    "appId": "com.aginsights.seedbank",
+    "productName": "SeedBank Insights",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**",
+      "!dist/**/*.map",
+      "dist-electron/**",
+      "assets/**",
+      "package.json"
+    ],
+    "mac": {
+      "icon": "assets/branding/app-icon.icns",
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.productivity"
+    },
+    "win": {
+      "icon": "assets/branding/app-icon.ico",
+      "target": [
+        "nsis"
+      ]
+    }
+  }
+}
