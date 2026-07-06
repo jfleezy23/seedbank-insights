@@ -14,7 +14,8 @@ test("sidebar navigation renders distinct workspaces and settings state", async 
   await expect(page.getByRole("img", { name: "Portland State University" })).toBeVisible();
 
   await page.getByRole("button", { name: "Species Explorer" }).click();
-  await expect(page.getByRole("heading", { name: "Species insights" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Species workbench" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Learn more" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Deterministic species summary" })).toBeVisible();
 
   await page.getByRole("button", { name: "Treatment Comparator" }).click();
@@ -92,10 +93,21 @@ test("species explorer can generate and regenerate cached AI insights", async ({
           species: "Lomatium testii",
           deterministicConfidence: "Promising",
           summary: "Cold stratification is promising but still needs replication.",
+          propagationInterpretation: "Cold stratification looks like the working dormancy hypothesis for this species.",
           keyFindings: ["CS has the highest PC scores in the submitted rows."],
           nextSteps: ["Repeat paired control and CS trays."],
+          trialDesign: "Run three paired C and CS trays across accessions, then track liner survival.",
+          cautionFlags: ["Do not treat this as a production protocol until more accessions repeat it."],
           confidenceCaveat: "Deterministic labels stay authoritative.",
           evidence: [{ sourceRow: 3, accession: "P1", treatment: "CS", observation: "PC 5; status ND" }],
+          learnMoreLinks: [
+            {
+              label: "GBIF species search",
+              source: "GBIF",
+              url: "https://www.gbif.org/species/search?q=Lomatium%20testii",
+              purpose: "Taxonomy and occurrence context."
+            }
+          ],
           generatedBy: "openai",
           model: "gpt-5.5",
           generatedAt: "2026-01-01T00:00:00.000Z"
@@ -150,6 +162,8 @@ test("species explorer can generate and regenerate cached AI insights", async ({
   });
   await page.evaluate(() => (window as any).resolveSpeciesGeneration());
   await expect(page.getByText("Cold stratification is promising but still needs replication.")).toBeVisible();
+  await expect(page.getByText("Cold stratification looks like the working dormancy hypothesis for this species.")).toBeVisible();
+  await expect(page.getByRole("link", { name: /GBIF species search/ })).toBeVisible();
   await expect(page.getByRole("button", { name: "Regenerate insights" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Deterministic species summary" })).toBeVisible();
 });

@@ -71,8 +71,11 @@ describe("OpenAI species insight validation", () => {
           {
             species: "Lomatium testii",
             summary: "Cold stratification is promising but still needs replication.",
+            propagationInterpretation: "The submitted rows suggest cold stratification is the treatment worth repeating.",
             keyFindings: ["CS has the highest PC scores in the submitted rows."],
             nextSteps: ["Repeat paired control and CS trays."],
+            trialDesign: "Run at least three paired accessions with C and CS treatments and record PC plus liner survival.",
+            cautionFlags: ["Only a small number of accessions are represented."],
             confidenceCaveat: "The deterministic label remains underpowered.",
             evidence: [
               { sourceRow: 3, accession: "MODEL-WRONG", treatment: "MODEL-WRONG", observation: "MODEL-WRONG" },
@@ -94,6 +97,7 @@ describe("OpenAI species insight validation", () => {
       treatment: "CS",
       observation: "PC 5; status ND"
     });
+    expect(insights[0].propagationInterpretation).toContain("cold stratification");
     expect(insights[0].model).toBe("gpt-5.5");
   });
 
@@ -109,8 +113,11 @@ describe("OpenAI species insight validation", () => {
               species: "Lomatium testii",
               summary: "Looks strong.",
               confidence: "Strong signal",
+              propagationInterpretation: "High PC may reflect a useful pretreatment.",
               keyFindings: ["High PC."],
               nextSteps: ["Roll out broadly."],
+              trialDesign: "Use a broad rollout.",
+              cautionFlags: ["No caveats."],
               confidenceCaveat: "None.",
               evidence: [{ sourceRow: 2, accession: "P1", treatment: "CS", observation: "PC 5" }]
             }
@@ -137,8 +144,11 @@ describe("OpenAI species insight validation", () => {
             {
               species: "Lomatium testii",
               summary: "This is a Strong signal.",
+              propagationInterpretation: "Cold stratification may be useful.",
               keyFindings: ["CS has high PC scores."],
               nextSteps: ["Repeat paired trays."],
+              trialDesign: "Repeat the paired comparison.",
+              cautionFlags: ["Still underpowered."],
               confidenceCaveat: "The deterministic label remains promising.",
               evidence: [{ sourceRow: 3, accession: "P1", treatment: "CS", observation: "PC 5" }]
             }

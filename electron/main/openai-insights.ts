@@ -28,8 +28,11 @@ const SpeciesInsightDraftSchema = z
   .object({
     species: z.string(),
     summary: z.string().min(1),
+    propagationInterpretation: z.string().min(1),
     keyFindings: z.array(z.string().min(1)).min(1).max(4),
     nextSteps: z.array(z.string().min(1)).min(1).max(4),
+    trialDesign: z.string().min(1),
+    cautionFlags: z.array(z.string().min(1)).min(1).max(4),
     confidenceCaveat: z.string().min(1),
     evidence: z.array(EvidenceSchema).min(1).max(5)
   })
@@ -85,6 +88,7 @@ const SPECIES_INSIGHT_JSON_SCHEMA = {
         properties: {
           species: { type: "string" },
           summary: { type: "string" },
+          propagationInterpretation: { type: "string" },
           keyFindings: {
             type: "array",
             minItems: 1,
@@ -92,6 +96,13 @@ const SPECIES_INSIGHT_JSON_SCHEMA = {
             items: { type: "string" }
           },
           nextSteps: {
+            type: "array",
+            minItems: 1,
+            maxItems: 4,
+            items: { type: "string" }
+          },
+          trialDesign: { type: "string" },
+          cautionFlags: {
             type: "array",
             minItems: 1,
             maxItems: 4,
@@ -115,7 +126,17 @@ const SPECIES_INSIGHT_JSON_SCHEMA = {
             }
           }
         },
-        required: ["species", "summary", "keyFindings", "nextSteps", "confidenceCaveat", "evidence"]
+        required: [
+          "species",
+          "summary",
+          "propagationInterpretation",
+          "keyFindings",
+          "nextSteps",
+          "trialDesign",
+          "cautionFlags",
+          "confidenceCaveat",
+          "evidence"
+        ]
       }
     }
   },
@@ -384,7 +405,15 @@ export function parseSpeciesInsightResponse(
     const context = contextBySpecies.get(draft.species);
     if (!context) continue;
     assertNoConfidenceUpgrade(
-      [draft.summary, ...draft.keyFindings, ...draft.nextSteps, draft.confidenceCaveat],
+      [
+        draft.summary,
+        draft.propagationInterpretation,
+        ...draft.keyFindings,
+        ...draft.nextSteps,
+        draft.trialDesign,
+        ...draft.cautionFlags,
+        draft.confidenceCaveat
+      ],
       context.deterministicConfidence,
       `Species insight for ${context.species}`
     );
@@ -393,8 +422,11 @@ export function parseSpeciesInsightResponse(
       species: context.species,
       deterministicConfidence: context.deterministicConfidence,
       summary: draft.summary,
+      propagationInterpretation: draft.propagationInterpretation,
       keyFindings: draft.keyFindings,
       nextSteps: draft.nextSteps,
+      trialDesign: draft.trialDesign,
+      cautionFlags: draft.cautionFlags,
       confidenceCaveat: draft.confidenceCaveat,
       evidence: evidence.length ? evidence : fallbackEvidence(context),
       generatedBy: "openai",
@@ -452,7 +484,7 @@ export async function generateSpeciesInsights({
   const response = await client.responses.create({
     model: OPENAI_INSIGHT_MODEL,
     instructions:
-      "You are a botanist and seed-bank scientist with decades of propagation experience. Interpret the provided PSU-style propagation evidence for each species. Do not change deterministic confidence labels, do not overstate underpowered findings, and cite only source rows present in the payload.",
+      "You are a botanist and seed-bank scientist with decades of propagation experience. Interpret the provided PSU-style propagation evidence for each species. Produce species-specific propagation interpretation: likely dormancy/handling hypothesis from the submitted rows, what method looks worth repeating, what evidence is missing, and a practical next-trial design. Do not change deterministic confidence labels, do not overstate underpowered findings, and cite only source rows present in the payload. Do not provide URLs; the app attaches vetted reference links separately.",
     input: JSON.stringify({
       batch: dashboard.batch,
       guardrails: dashboard.dataQualityIssues,

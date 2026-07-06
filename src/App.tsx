@@ -4,10 +4,12 @@ import {
   BarChart3,
   BrainCircuit,
   Database,
+  ExternalLink,
   FileSpreadsheet,
   FlaskConical,
   KeyRound,
   Leaf,
+  ListChecks,
   MessageSquareText,
   Microscope,
   Save,
@@ -26,7 +28,8 @@ import { MetricCard } from "./components/MetricCard";
 import { PairedComparisonPanel } from "./components/PairedComparisonPanel";
 import { TreatmentChart } from "./components/TreatmentChart";
 import { TrialQueueTable } from "./components/TrialQueueTable";
-import type { DashboardData } from "./core/types";
+import { buildSpeciesResourceLinks } from "./core/speciesResources";
+import type { DashboardData, SpeciesInsight, SpeciesSummary } from "./core/types";
 import { sampleDashboard } from "./data/sampleDashboard";
 import "./App.css";
 
@@ -53,6 +56,34 @@ function AiStatusPill({ dashboard }: { dashboard: DashboardData }) {
   );
 }
 
+function deterministicSpeciesRead(summary: SpeciesSummary | undefined): string {
+  if (!summary) return "Select a species to inspect its propagation evidence.";
+  const treatment = summary.bestTreatment ?? "No treatment has enough PC data yet";
+  const mean = summary.bestPcMean === null ? "" : ` with mean PC ${summary.bestPcMean.toFixed(1)}`;
+  if (summary.confidence === "Needs replication") {
+    return `${summary.species} has ${summary.rows} row${summary.rows === 1 ? "" : "s"} across ${summary.treatments} treatment${summary.treatments === 1 ? "" : "s"}. ${treatment}${mean}; keep this as a hypothesis until more accessions repeat it.`;
+  }
+  if (summary.confidence === "Inconclusive") {
+    return `${summary.species} has some treatment coverage, but PC or follow-up observations are too thin for a directional call. ${treatment}${mean}.`;
+  }
+  return `${summary.species} is worth closer attention: ${treatment}${mean} is the current local leader, with ${summary.pcCount} PC score${summary.pcCount === 1 ? "" : "s"} available.`;
+}
+
+function deterministicTrialDesign(summary: SpeciesSummary | undefined): string {
+  if (!summary) return "Import data to build a species-specific trial plan.";
+  if (summary.accessions < 3 || summary.treatments < 2) {
+    return "Add paired control and candidate-treatment trays across at least three accessions before recommending a protocol.";
+  }
+  if (summary.pcCount < summary.rows) {
+    return "Prioritize missing PC and production follow-up before adding more treatment variants.";
+  }
+  return "Repeat the current best treatment against control and the nearest alternative, then track liner and 4-inch survival.";
+}
+
+function insightForSpecies(insights: SpeciesInsight[], species: string): SpeciesInsight | undefined {
+  return insights.find((insight) => insight.species === species);
+}
+
 function SpeciesExplorer({
   dashboard,
   aiConfigured,
@@ -69,6 +100,24 @@ function SpeciesExplorer({
   const hasBatch = Boolean(dashboard.batch);
   const hasInsights = dashboard.speciesInsights.length > 0;
   const canGenerate = aiConfigured && hasBatch && !actionDisabled;
+  const speciesOptions = useMemo(() => {
+    const bySpecies = new Map<string, { summary?: SpeciesSummary; insight?: SpeciesInsight }>();
+    for (const summary of dashboard.speciesSummaries) {
+      bySpecies.set(summary.species, { ...(bySpecies.get(summary.species) ?? {}), summary });
+    }
+    for (const insight of dashboard.speciesInsights) {
+      bySpecies.set(insight.species, { ...(bySpecies.get(insight.species) ?? {}), insight });
+    }
+    return [...bySpecies.entries()]
+      .map(([species, value]) => ({ species, ...value }))
+      .sort((a, b) => {
+        const aRows = a.summary?.rows ?? 0;
+        const bRows = b.summary?.rows ?? 0;
+        return bRows - aRows || a.species.localeCompare(b.species);
+      });
+  }, [dashboard.speciesInsights, dashboard.speciesSummaries]);
+  const firstSpecies = speciesOptions[0]?.species ?? "";
+  const [selectedSpecies, setSelectedSpecies] = useState(firstSpecies);
   const emptyTitle = !hasBatch
     ? "Import a workbook before generating species insights."
     : !aiConfigured
@@ -76,13 +125,32 @@ function SpeciesExplorer({
       : generatingSpeciesInsights
         ? "Generating species insights from the imported workbook..."
         : "Generate AI species insights for this import.";
+  useEffect(() => {
+    if (!firstSpecies) return;
+    if (!speciesOptions.some((option) => option.species === selectedSpecies)) {
+      setSelectedSpecies(firstSpecies);
+    }
+  }, [firstSpecies, selectedSpecies, speciesOptions]);
+
+  const selectedSummary =
+    dashboard.speciesSummaries.find((summary) => summary.species === selectedSpecies) ?? speciesOptions[0]?.summary;
+  const activeSpecies = selectedSummary?.species ?? selectedSpecies;
+  const selectedInsight = insightForSpecies(dashboard.speciesInsights, activeSpecies);
+  const selectedLinks = activeSpecies ? buildSpeciesResourceLinks(activeSpecies) : [];
+  const findings = selectedInsight?.keyFindings ?? [deterministicSpeciesRead(selectedSummary)];
+  const nextSteps = selectedInsight?.nextSteps ?? [deterministicTrialDesign(selectedSummary)];
+  const cautionFlags = selectedInsight?.cautionFlags ?? [
+    selectedSummary?.confidence === "Needs replication"
+      ? "Do not treat one high score as a species protocol."
+      : "Keep deterministic confidence labels in front of any narrative interpretation."
+  ];
 
   return (
     <section className="view-stack">
-      <section className="panel species-insights-panel">
+      <section className="panel species-workbench-panel">
         <div className="panel-heading">
           <div>
-            <h2>Species insights</h2>
+            <h2>Species workbench</h2>
             <p>{dashboard.aiInsightStatus.message}</p>
           </div>
           <div className="species-actions">
@@ -99,32 +167,113 @@ function SpeciesExplorer({
             ) : null}
           </div>
         </div>
-        {dashboard.speciesInsights.length ? (
-          <div className="species-insight-grid">
-            {dashboard.speciesInsights.map((insight) => (
-              <article className="species-card" key={insight.species}>
-                <div className="species-card-heading">
-                  <div>
-                    <strong>{insight.species}</strong>
-                    <span>{insight.model ?? "deterministic"}</span>
+
+        {speciesOptions.length ? (
+          <div className="species-workbench">
+            <div className="species-selector" role="listbox" aria-label="Species">
+              {speciesOptions.slice(0, 40).map((option) => (
+                <button
+                  type="button"
+                  className={option.species === activeSpecies ? "active" : ""}
+                  key={option.species}
+                  onClick={() => setSelectedSpecies(option.species)}
+                >
+                  <span>{option.species}</span>
+                  <small>
+                    {option.summary?.rows ?? 0} rows
+                    {option.insight ? " · AI" : ""}
+                  </small>
+                </button>
+              ))}
+            </div>
+
+            <article className="species-detail">
+              <div className="species-detail-heading">
+                <div>
+                  <h3>{activeSpecies}</h3>
+                  <span>{selectedInsight ? `AI interpretation · ${selectedInsight.model}` : "Local evidence read"}</span>
+                </div>
+                {selectedSummary ? <ConfidenceBadge label={selectedSummary.confidence} /> : null}
+              </div>
+
+              <div className="species-metrics">
+                <span>{selectedSummary?.rows ?? 0} rows</span>
+                <span>{selectedSummary?.accessions ?? 0} accessions</span>
+                <span>{selectedSummary?.treatments ?? 0} treatments</span>
+                <span>{selectedSummary?.pcCount ?? 0} PC scores</span>
+                <span>{selectedSummary?.bestTreatment ?? "No leader"}</span>
+              </div>
+
+              <section className="species-detail-section primary">
+                <h4>{selectedInsight ? "Botanist read" : "Deterministic read"}</h4>
+                <p>{selectedInsight?.summary ?? deterministicSpeciesRead(selectedSummary)}</p>
+                {selectedInsight?.propagationInterpretation ? <p>{selectedInsight.propagationInterpretation}</p> : null}
+              </section>
+
+              <div className="species-detail-grid">
+                <section className="species-detail-section">
+                  <h4>Evidence</h4>
+                  <ul>
+                    {findings.slice(0, 4).map((finding) => (
+                      <li key={finding}>{finding}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section className="species-detail-section">
+                  <h4>Next trial</h4>
+                  <p>{selectedInsight?.trialDesign ?? deterministicTrialDesign(selectedSummary)}</p>
+                  <ul>
+                    {nextSteps.slice(0, 3).map((step) => (
+                      <li key={step}>{step}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section className="species-detail-section">
+                  <h4>Guardrails</h4>
+                  <p>{selectedInsight?.confidenceCaveat ?? "Deterministic confidence remains the decision label."}</p>
+                  <ul>
+                    {cautionFlags.slice(0, 3).map((flag) => (
+                      <li key={flag}>{flag}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                <section className="species-detail-section">
+                  <h4>Source rows</h4>
+                  <div className="evidence-list">
+                    {selectedInsight?.evidence.length ? (
+                      selectedInsight.evidence.slice(0, 4).map((evidence) => (
+                        <span key={`${activeSpecies}-${evidence.sourceRow}-${evidence.treatment}`}>
+                          Row {evidence.sourceRow}: {evidence.treatment} - {evidence.observation}
+                        </span>
+                      ))
+                    ) : (
+                      <span>Generate species insights to bind narrative claims to source rows.</span>
+                    )}
                   </div>
-                  <ConfidenceBadge label={insight.deterministicConfidence} />
+                </section>
+              </div>
+
+              <section className="species-detail-section resources">
+                <div className="resource-heading">
+                  <h4>Learn more</h4>
+                  <span>Curated reference searches for taxonomy, range, and habitat context.</span>
                 </div>
-                <p>{insight.summary}</p>
-                <ul>
-                  {insight.keyFindings.slice(0, 3).map((finding) => (
-                    <li key={finding}>{finding}</li>
-                  ))}
-                </ul>
-                <div className="evidence-list">
-                  {insight.evidence.slice(0, 3).map((evidence) => (
-                    <span key={`${insight.species}-${evidence.sourceRow}-${evidence.treatment}`}>
-                      Row {evidence.sourceRow}: {evidence.treatment} - {evidence.observation}
-                    </span>
+                <div className="species-resource-grid">
+                  {selectedLinks.map((link) => (
+                    <a href={link.url} target="_blank" rel="noreferrer" key={`${activeSpecies}-${link.source}`}>
+                      <strong>
+                        {link.label}
+                        <ExternalLink size={13} />
+                      </strong>
+                      <span>{link.purpose}</span>
+                    </a>
                   ))}
                 </div>
-              </article>
-            ))}
+              </section>
+            </article>
           </div>
         ) : (
           <div className="empty-state">
@@ -141,6 +290,7 @@ function SpeciesExplorer({
             <h2>Deterministic species summary</h2>
             <p>Counts and confidence labels are computed locally.</p>
           </div>
+          <ListChecks size={18} />
         </div>
         <table>
           <thead>

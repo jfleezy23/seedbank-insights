@@ -79,12 +79,22 @@ export interface SpeciesInsightEvidence {
   observation: string;
 }
 
+export interface SpeciesResourceLink {
+  label: string;
+  source: string;
+  url: string;
+  purpose: string;
+}
+
 export interface SpeciesInsight {
   species: string;
   deterministicConfidence: ConfidenceLabel;
   summary: string;
+  propagationInterpretation?: string;
   keyFindings: string[];
   nextSteps: string[];
+  trialDesign?: string;
+  cautionFlags?: string[];
   confidenceCaveat: string;
   evidence: SpeciesInsightEvidence[];
   generatedBy: "openai" | "deterministic";
