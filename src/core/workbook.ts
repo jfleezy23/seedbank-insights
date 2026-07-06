@@ -7,7 +7,7 @@ import { parseObservationsFromTrial } from "./notes";
 import { parseTreatment } from "./treatments";
 import type { DataQualityIssue, ImportResult, TrialRecord } from "./types";
 
-const REQUIRED_HEADERS = [
+export const REQUIRED_HEADERS = [
   "P_Accession",
   "Source_Accession",
   "Species",
@@ -20,12 +20,46 @@ const REQUIRED_HEADERS = [
 ];
 
 const TrialStatusSchema = z.union([z.literal("D"), z.literal("ND")]).nullable();
+const HEADER_ALIAS_GROUPS: Array<[string, string[]]> = [
+    ["P_Accession", ["P Accession", "Propagation Accession", "PAccession", "P Acc"]],
+    ["Source_Accession", ["Source Accession", "Source", "Seed Bank Accession", "S Accession"]],
+    ["Species", ["Taxon", "Scientific Name", "Species Name"]],
+    ["Trt", ["Treatment", "Treatments", "Treatment String"]],
+    ["Num", ["Number", "Count", "N"]],
+    ["Start", ["Start Date", "Sown", "Sow Date"]],
+    ["PT", ["Propagule Type", "Prop Type"]],
+    ["TTD", ["Done Date", "Trial Done"]],
+    ["PC", ["Propagation Class", "Propagation Score"]]
+  ];
+
+const HEADER_SYNONYMS = new Map<string, string>(
+  HEADER_ALIAS_GROUPS.flatMap(([canonical, aliases]) =>
+    [canonical, ...aliases].flatMap((alias) => [
+      [alias, canonical],
+      [normalizeHeader(alias), canonical]
+    ])
+  )
+);
 
 function normalizeHeader(header: unknown): string {
   return String(header ?? "")
     .trim()
     .replace(/\s+/g, "_")
     .toLowerCase();
+}
+
+function canonicalHeader(header: unknown): string {
+  const text = stringValue(header) ?? "";
+  return HEADER_SYNONYMS.get(text) ?? HEADER_SYNONYMS.get(normalizeHeader(text)) ?? text;
+}
+
+function canonicalHeaderWithAliases(header: unknown, aliases: Record<string, string>): string {
+  const text = stringValue(header) ?? "";
+  const alias = aliases[text] ?? aliases[normalizeHeader(text)];
+  if (alias && REQUIRED_HEADERS.some((required) => normalizeHeader(required) === normalizeHeader(alias))) {
+    return alias;
+  }
+  return canonicalHeader(text);
 }
 
 function valueFromCell(cell: ExcelJS.Cell): unknown {
@@ -59,18 +93,44 @@ function numberValue(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+function formatDateParts(year: number, month: number, day: number): string | null {
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
+  if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) return null;
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) {
+    return null;
+  }
+  return date.toISOString().slice(0, 10);
+}
+
+function dateFromString(value: string): string | null {
+  const text = value.trim();
+  const iso = text.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})(?:\b|T|\s)/);
+  if (iso) return formatDateParts(Number(iso[1]), Number(iso[2]), Number(iso[3]));
+
+  const slash = text.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})(?:\b|\s)/);
+  if (slash) {
+    const rawYear = Number(slash[3]);
+    const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+    return formatDateParts(year, Number(slash[1]), Number(slash[2]));
+  }
+
+  const parsed = new Date(text);
+  if (Number.isNaN(parsed.getTime())) return null;
+  return formatDateParts(parsed.getUTCFullYear(), parsed.getUTCMonth() + 1, parsed.getUTCDate());
+}
+
 function dateValue(value: unknown): string | null {
   if (value === null || value === undefined || value === "") return null;
   if (value instanceof Date && !Number.isNaN(value.getTime())) {
-    return value.toISOString().slice(0, 10);
+    return formatDateParts(value.getFullYear(), value.getMonth() + 1, value.getDate());
   }
   if (typeof value === "number") {
     const epoch = new Date(Date.UTC(1899, 11, 30));
     epoch.setUTCDate(epoch.getUTCDate() + value);
     return epoch.toISOString().slice(0, 10);
   }
-  const parsed = new Date(String(value));
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString().slice(0, 10);
+  return dateFromString(String(value));
 }
 
 function statusValue(value: unknown): "D" | "ND" | null {
@@ -86,6 +146,16 @@ function get(row: Map<string, unknown>, ...headers: string[]): unknown {
   return null;
 }
 
+export interface WorkbookHeaderProfile {
+  worksheetName: string;
+  headers: string[];
+  missingHeaders: string[];
+}
+
+export interface ImportWorkbookOptions {
+  headerAliases?: Record<string, string>;
+}
+
 function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord | null {
   const pAccession = stringValue(get(row, "P_Accession"));
   const sourceAccession = stringValue(get(row, "Source_Accession"));
@@ -93,13 +163,13 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
   const treatment = stringValue(get(row, "Trt"));
 
   if (!pAccession && !sourceAccession && !species && !treatment) return null;
-  if (!pAccession || !sourceAccession || !species || !treatment) return null;
+  if (!pAccession || !species || !treatment) return null;
 
   const trial: TrialRecord = {
     id: `${pAccession}:${treatment}:${sourceRow}`,
     sourceRow,
     pAccession,
-    sourceAccession,
+    sourceAccession: sourceAccession ?? "",
     species,
     treatment,
     num: numberValue(get(row, "Num")),
@@ -127,8 +197,17 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
 
 function dataQualityFromTrials(trials: TrialRecord[]): DataQualityIssue[] {
   const missingPt = trials.filter((trial) => !trial.propaguleType).length;
+  const missingSource = trials.filter((trial) => !trial.sourceAccession).length;
   const unmappedTokens = trials.filter((trial) => trial.treatmentComponents.warnings.length).length;
   const issues: DataQualityIssue[] = [];
+  if (missingSource) {
+    issues.push({
+      severity: "medium",
+      title: "Missing source accession",
+      detail: "Rows without Source_Accession are retained, but provenance should be reviewed before broad conclusions.",
+      affectedRows: missingSource
+    });
+  }
   if (missingPt) {
     issues.push({
       severity: "low",
@@ -148,9 +227,7 @@ function dataQualityFromTrials(trials: TrialRecord[]): DataQualityIssue[] {
   return issues;
 }
 
-export async function importWorkbook(filePath: string): Promise<ImportResult> {
-  const buffer = await readFile(filePath);
-  const workbookHash = createHash("sha256").update(buffer).digest("hex");
+async function openWorkbook(filePath: string): Promise<{ workbook: ExcelJS.Workbook; worksheet: ExcelJS.Worksheet }> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.readFile(filePath);
 
@@ -161,15 +238,41 @@ export async function importWorkbook(filePath: string): Promise<ImportResult> {
   if (!worksheet) {
     throw new Error("No propagation accession worksheet found.");
   }
+  return { workbook, worksheet };
+}
 
+function readHeaders(worksheet: ExcelJS.Worksheet, aliases: Record<string, string> = {}): string[] {
   const headers: string[] = [];
   worksheet.getRow(1).eachCell({ includeEmpty: true }, (cell, colNumber) => {
-    headers[colNumber] = String(valueFromCell(cell) ?? "");
+    headers[colNumber] = canonicalHeaderWithAliases(valueFromCell(cell), aliases);
   });
+  return headers;
+}
 
-  const missingHeaders = REQUIRED_HEADERS.filter(
+function missingRequiredHeaders(headers: string[]): string[] {
+  return REQUIRED_HEADERS.filter(
     (required) => !headers.some((header) => normalizeHeader(header) === normalizeHeader(required))
   );
+}
+
+export async function inspectWorkbookHeaders(filePath: string): Promise<WorkbookHeaderProfile> {
+  const { worksheet } = await openWorkbook(filePath);
+  const headers = readHeaders(worksheet);
+  return {
+    worksheetName: worksheet.name,
+    headers: headers.filter(Boolean),
+    missingHeaders: missingRequiredHeaders(headers)
+  };
+}
+
+export async function importWorkbook(filePath: string, options: ImportWorkbookOptions = {}): Promise<ImportResult> {
+  const buffer = await readFile(filePath);
+  const workbookHash = createHash("sha256").update(buffer).digest("hex");
+  const { worksheet } = await openWorkbook(filePath);
+
+  const headers = readHeaders(worksheet, options.headerAliases ?? {});
+
+  const missingHeaders = missingRequiredHeaders(headers);
 
   const trials: TrialRecord[] = [];
   for (let rowNumber = 2; rowNumber <= worksheet.rowCount; rowNumber += 1) {

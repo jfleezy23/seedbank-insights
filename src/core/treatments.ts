@@ -9,18 +9,21 @@ function numberAfter(prefix: string, token: string): number | null {
 
 export function parseTreatment(input: unknown): TreatmentComponents {
   const raw = String(input ?? "").trim();
-  const normalized = raw.toUpperCase().replace(/\s+/g, "");
-  const tokens = normalized.split(TOKEN_SPLIT).filter(Boolean);
+  const tokens = raw
+    .toUpperCase()
+    .split(TOKEN_SPLIT)
+    .map((token) => token.trim())
+    .filter(Boolean);
+  const normalized = tokens.join("+");
   const warnings: string[] = [];
 
   const hasCold = tokens.some((token) => token === "CS" || /^CS\d+$/.test(token));
   const hasWarm = tokens.some((token) => token === "WS" || /^WS\d+$/.test(token));
   const hasScarWh = tokens.includes("SCARWH");
-  const hasScarification =
-    hasScarWh || tokens.some((token) => token === "SCAR" || token.startsWith("SCAR+"));
+  const hasScarification = hasScarWh || tokens.some((token) => token === "SCAR");
   const hasHotWater = hasScarWh || tokens.includes("H20") || tokens.includes("HOTWATER");
-  const hasGa = tokens.some((token) => token === "GA" || token.startsWith("GA"));
-  const isControl = normalized === "C" || normalized.endsWith("+C");
+  const hasGa = tokens.some((token) => /^GA-?\d*$/.test(token));
+  const isControl = tokens.length === 1 ? tokens[0] === "C" : tokens[tokens.length - 1] === "C";
 
   const coldDays = tokens.flatMap((token) => {
     if (token === "CS") return [120];
@@ -42,7 +45,7 @@ export function parseTreatment(input: unknown): TreatmentComponents {
       token === "SCAR" ||
       token === "SCARWH" ||
       token === "H20" ||
-      token === "GA" ||
+      /^GA-?\d*$/.test(token) ||
       /^CS\d+$/.test(token) ||
       /^WS\d+$/.test(token);
     if (!known) warnings.push(`Unmapped treatment token: ${token}`);

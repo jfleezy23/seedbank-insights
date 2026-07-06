@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { DashboardData } from "../../src/core/types";
+import type { AskAnswer, DashboardData } from "../../src/core/types";
 
 export interface OpenAiStatus {
   configured: boolean;
@@ -13,6 +13,7 @@ export interface SeedBankApi {
   getOpenAiStatus(): Promise<OpenAiStatus>;
   saveOpenAiKey(key: string): Promise<OpenAiStatus>;
   clearOpenAiKey(): Promise<OpenAiStatus>;
+  askQuestion(question: string): Promise<AskAnswer>;
 }
 
 const api: SeedBankApi = {
@@ -21,7 +22,8 @@ const api: SeedBankApi = {
   importLocalDefaultWorkbook: () => ipcRenderer.invoke("workbook:importLocalDefault"),
   getOpenAiStatus: () => ipcRenderer.invoke("openai:status"),
   saveOpenAiKey: (key) => ipcRenderer.invoke("openai:saveKey", key),
-  clearOpenAiKey: () => ipcRenderer.invoke("openai:clearKey")
+  clearOpenAiKey: () => ipcRenderer.invoke("openai:clearKey"),
+  askQuestion: (question) => ipcRenderer.invoke("openai:ask", question)
 };
 
 contextBridge.exposeInMainWorld("seedbank", api);

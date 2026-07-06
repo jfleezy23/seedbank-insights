@@ -1,5 +1,8 @@
 import { existsSync } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { importWorkbook } from "../../src/core/workbook";
 import { pairedComparison } from "../../src/core/statistics";
@@ -18,6 +21,44 @@ describe("committed PSU-style workbook fixture import", () => {
     const comparison = pairedComparison(result.trials, "C", "CS");
     expect(comparison.n).toBe(2);
     expect(comparison.confidence).toBe("Needs replication");
+  });
+
+  it("imports rich headers, stable date strings, and rows without source accessions", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "seedbank-rich-headers-"));
+    const generatedPath = path.join(dir, "rich-headers.xlsx");
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("P_accessions");
+      [
+        "P Accession",
+        "Source_Accession",
+        { richText: [{ text: "Species" }] },
+        { text: "Trt", hyperlink: "https://example.test/header" },
+        "Num",
+        "Start",
+        "PT",
+        "TTD",
+        "PC"
+      ].forEach((value, index) => {
+        sheet.getCell(1, index + 1).value = value;
+      });
+      sheet.addRow(["P9000", "", "Lomatium testii", "WS CS", 25, "2025-01-02", "s", "2025-03-04", 4]);
+      await workbook.xlsx.writeFile(generatedPath);
+
+      const result = await importWorkbook(generatedPath);
+      expect(result.trials).toHaveLength(1);
+      expect(result.trials[0]).toMatchObject({
+        pAccession: "P9000",
+        sourceAccession: "",
+        species: "Lomatium testii",
+        startDate: "2025-01-02",
+        ttd: "2025-03-04"
+      });
+      expect(result.trials[0].treatmentComponents.tokens).toEqual(["WS", "CS"]);
+      expect(result.issues.some((issue) => issue.title === "Missing source accession")).toBe(true);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });
 

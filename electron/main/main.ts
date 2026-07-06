@@ -2,7 +2,14 @@ import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
 import fs from "node:fs";
 import path from "node:path";
 import { SeedBankDatabase } from "./database";
-import { importWorkbook } from "../../src/core/workbook";
+import {
+  answerSpreadsheetQuestion,
+  generateSpeciesInsights,
+  OPENAI_INSIGHT_MODEL,
+  suggestHeaderAliases
+} from "./openai-insights";
+import { importWorkbook, inspectWorkbookHeaders } from "../../src/core/workbook";
+import type { AiInsightStatus, DashboardData, ImportResult } from "../../src/core/types";
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
@@ -29,6 +36,17 @@ function appIconPath(): string {
 
 function dockIconPath(): string {
   return appAssetPath("assets", "branding", "app-icon.png");
+}
+
+function sanitizeErrorMessage(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message
+    .replace(/sk-[A-Za-z0-9_-]+/g, "sk-REDACTED")
+    .replace(/Bearer\s+[A-Za-z0-9._-]+/gi, "Bearer REDACTED");
+}
+
+function openAiFailureMessage(action: string): string {
+  return `OpenAI ${action} failed. Check Settings, network access, and the API key, then try again.`;
 }
 
 function getDatabase(): SeedBankDatabase {
@@ -258,6 +276,85 @@ function keyPath(): string {
   return path.join(app.getPath("userData"), "openai-key.bin");
 }
 
+function loadOpenAiKey(): string | null {
+  if (!fs.existsSync(keyPath()) || !safeStorage.isEncryptionAvailable()) return null;
+  try {
+    return safeStorage.decryptString(fs.readFileSync(keyPath()));
+  } catch (error) {
+    console.error("Failed to decrypt OpenAI key", error);
+    return null;
+  }
+}
+
+function openAiConfigured(): boolean {
+  return fs.existsSync(keyPath()) && safeStorage.isEncryptionAvailable();
+}
+
+function withOpenAiStatus(dashboard: DashboardData, override?: Partial<AiInsightStatus>): DashboardData {
+  const configured = openAiConfigured();
+  const ready = dashboard.speciesInsights.length > 0;
+  const base: AiInsightStatus = ready
+    ? {
+        configured,
+        state: "ready",
+        message: `Cached species insights available for ${dashboard.speciesInsights.length} species.`,
+        model: dashboard.speciesInsights[0]?.model ?? OPENAI_INSIGHT_MODEL,
+        generatedAt: dashboard.speciesInsights[0]?.generatedAt ?? null
+      }
+    : configured
+      ? {
+          configured,
+          state: "not_generated",
+          message: "OpenAI is configured. Species insights will generate on the next spreadsheet import.",
+          model: OPENAI_INSIGHT_MODEL,
+          generatedAt: null
+        }
+      : {
+          configured,
+          state: "not_configured",
+          message: "OpenAI is optional. Add an API key to generate cached species insights on import.",
+          model: OPENAI_INSIGHT_MODEL,
+          generatedAt: null
+        };
+  return { ...dashboard, aiInsightStatus: { ...base, ...override, configured } };
+}
+
+async function saveImportAndMaybeGenerateAi(result: ImportResult): Promise<DashboardData> {
+  const saved = getDatabase().saveImport(result);
+  const batchId = saved.batch?.id;
+  const apiKey = loadOpenAiKey();
+  if (!batchId || !apiKey) return withOpenAiStatus(saved);
+
+  try {
+    const insights = await generateSpeciesInsights({ apiKey, importResult: result, dashboard: saved });
+    getDatabase().saveSpeciesInsights(batchId, insights);
+    return withOpenAiStatus(getDatabase().getDashboard(batchId));
+  } catch (error) {
+    const message = openAiFailureMessage("species insight generation");
+    console.warn(`OpenAI species insight generation failed: ${sanitizeErrorMessage(error)}`);
+    return withOpenAiStatus(saved, {
+      state: "error",
+      message,
+      model: OPENAI_INSIGHT_MODEL,
+      generatedAt: null
+    });
+  }
+}
+
+async function importWorkbookWithOptionalAiPrep(filePath: string): Promise<ImportResult> {
+  const apiKey = loadOpenAiKey();
+  if (!apiKey) return importWorkbook(filePath);
+  const profile = await inspectWorkbookHeaders(filePath);
+  if (!profile.missingHeaders.length) return importWorkbook(filePath);
+  try {
+    const headerAliases = await suggestHeaderAliases({ apiKey, profile });
+    return importWorkbook(filePath, { headerAliases });
+  } catch (error) {
+    console.warn(`OpenAI header mapping failed; falling back to deterministic import: ${sanitizeErrorMessage(error)}`);
+    return importWorkbook(filePath);
+  }
+}
+
 function assertWorkbookPath(filePath: string): void {
   const extension = path.extname(filePath).toLowerCase();
   if (![".xlsx", ".xls"].includes(extension)) {
@@ -270,7 +367,7 @@ function assertWorkbookPath(filePath: string): void {
   }
 }
 
-ipcMain.handle("dashboard:get", () => getDatabase().getDashboard());
+ipcMain.handle("dashboard:get", () => withOpenAiStatus(getDatabase().getDashboard()));
 
 ipcMain.handle("workbook:select", async () => {
   const result = await dialog.showOpenDialog({
@@ -279,8 +376,8 @@ ipcMain.handle("workbook:select", async () => {
   });
   if (result.canceled || !result.filePaths[0]) return null;
   assertWorkbookPath(result.filePaths[0]);
-  const imported = await importWorkbook(result.filePaths[0]);
-  return getDatabase().saveImport(imported);
+  const imported = await importWorkbookWithOptionalAiPrep(result.filePaths[0]);
+  return saveImportAndMaybeGenerateAi(imported);
 });
 
 ipcMain.handle("workbook:importLocalDefault", async () => {
@@ -291,12 +388,12 @@ ipcMain.handle("workbook:importLocalDefault", async () => {
   const found = candidates.find((candidate) => fs.existsSync(candidate));
   if (!found) return null;
   assertWorkbookPath(found);
-  const imported = await importWorkbook(found);
-  return getDatabase().saveImport(imported);
+  const imported = await importWorkbookWithOptionalAiPrep(found);
+  return saveImportAndMaybeGenerateAi(imported);
 });
 
 ipcMain.handle("openai:status", () => ({
-  configured: fs.existsSync(keyPath()),
+  configured: openAiConfigured(),
   safeStorageAvailable: safeStorage.isEncryptionAvailable()
 }));
 
@@ -304,7 +401,11 @@ ipcMain.handle("openai:saveKey", (_event, key: string) => {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("OS safe storage is unavailable on this machine.");
   }
-  const encrypted = safeStorage.encryptString(key);
+  const normalizedKey = String(key ?? "").trim();
+  if (!normalizedKey.startsWith("sk-") || normalizedKey.length < 24) {
+    throw new Error("Enter a valid OpenAI API key.");
+  }
+  const encrypted = safeStorage.encryptString(normalizedKey);
   fs.writeFileSync(keyPath(), encrypted);
   return { configured: true, safeStorageAvailable: true };
 });
@@ -314,8 +415,32 @@ ipcMain.handle("openai:clearKey", () => {
   return { configured: false, safeStorageAvailable: safeStorage.isEncryptionAvailable() };
 });
 
+ipcMain.handle("openai:ask", async (_event, question: string) => {
+  const trimmed = String(question ?? "").trim();
+  if (trimmed.length < 3) throw new Error("Ask a more specific question.");
+  if (trimmed.length > 700) throw new Error("Questions are limited to 700 characters for the demo.");
+  const apiKey = loadOpenAiKey();
+  if (!apiKey) throw new Error("OpenAI is not configured. Add an API key in Settings.");
+  try {
+    return await answerSpreadsheetQuestion({
+      apiKey,
+      question: trimmed,
+      context: getDatabase().getAskContext()
+    });
+  } catch (error) {
+    console.warn(`OpenAI Ask failed: ${sanitizeErrorMessage(error)}`);
+    throw new Error(openAiFailureMessage("Ask"));
+  }
+});
+
 app.whenReady().then(() => {
-  if (process.platform === "darwin") app.dock?.setIcon(dockIconPath());
+  if (process.platform === "darwin" && !app.isPackaged) {
+    try {
+      app.dock?.setIcon(dockIconPath());
+    } catch (error) {
+      console.warn(`Development Dock icon failed to load: ${sanitizeErrorMessage(error)}`);
+    }
+  }
   void launchApp().catch((error: unknown) => {
     showLaunchError(error);
   });

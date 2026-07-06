@@ -6,8 +6,33 @@ import type {
   DataQualityIssue,
   ImportResult,
   ParsedObservation,
+  SpeciesInsight,
   TrialRecord
 } from "../../src/core/types";
+
+export interface AskContext {
+  dashboard: DashboardData;
+  trials: Array<{
+    sourceRow: number;
+    accession: string;
+    sourceAccession: string;
+    species: string;
+    treatment: string;
+    num: number | null;
+    pc: number | null;
+    lpc: number | null;
+    fourPc: number | null;
+    status: string | null;
+    notes: string | null;
+  }>;
+  observations: Array<{
+    sourceRow: number;
+    kind: string;
+    value: number | null;
+    date: string | null;
+    rawSnippet: string;
+  }>;
+}
 
 export class SeedBankDatabase {
   private db: DatabaseType;
@@ -117,6 +142,28 @@ export class SeedBankDatabase {
         FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
       );
     `);
+  }
+
+  saveSpeciesInsights(importBatchId: number, insights: SpeciesInsight[]): void {
+    const tx = this.db.transaction(() => {
+      this.db
+        .prepare("DELETE FROM insights WHERE import_batch_id = ? AND kind = 'species_insight'")
+        .run(importBatchId);
+      const stmt = this.db.prepare(`
+        INSERT INTO insights (
+          import_batch_id, kind, label, payload_json, created_at
+        ) VALUES (?, 'species_insight', ?, ?, ?)
+      `);
+      for (const insight of insights) {
+        stmt.run(
+          importBatchId,
+          insight.species,
+          JSON.stringify(insight),
+          insight.generatedAt ?? new Date().toISOString()
+        );
+      }
+    });
+    tx();
   }
 
   saveImport(result: ImportResult): DashboardData {
@@ -234,6 +281,12 @@ export class SeedBankDatabase {
       .prepare("SELECT * FROM data_quality_issues WHERE import_batch_id = ? ORDER BY id")
       .all(batch) as Array<Record<string, unknown>>;
 
+    const insightRows = this.db
+      .prepare(
+        "SELECT payload_json FROM insights WHERE import_batch_id = ? AND kind = 'species_insight' ORDER BY label"
+      )
+      .all(batch) as Array<{ payload_json: string }>;
+
     const trials: TrialRecord[] = trialRows.map((row) => ({
       id: String(row.id),
       importBatchId: Number(row.import_batch_id),
@@ -280,6 +333,14 @@ export class SeedBankDatabase {
       affectedRows: Number(row.affected_rows)
     }));
 
+    const speciesInsights: SpeciesInsight[] = insightRows.flatMap((row) => {
+      try {
+        return [JSON.parse(row.payload_json) as SpeciesInsight];
+      } catch {
+        return [];
+      }
+    });
+
     return buildDashboardData(
       trials,
       observations,
@@ -294,10 +355,62 @@ export class SeedBankDatabase {
             speciesCount: batchRow.species_count,
             treatmentCount: batchRow.treatment_count,
             warnings: JSON.parse(batchRow.warnings_json)
-          }
+        }
         : null,
-      importIssues
+      importIssues,
+      speciesInsights
     );
+  }
+
+  getAskContext(batchId?: number): AskContext {
+    const dashboard = this.getDashboard(batchId);
+    const batch = dashboard.batch?.id;
+    if (!batch) return { dashboard, trials: [], observations: [] };
+
+    const trials = this.db
+      .prepare(
+        `SELECT source_row, p_accession, source_accession, species, treatment, num, pc, lpc,
+          four_pc, status, notes
+         FROM trials
+         WHERE import_batch_id = ?
+         ORDER BY species, source_row
+         LIMIT 220`
+      )
+      .all(batch) as Array<Record<string, unknown>>;
+
+    const observations = this.db
+      .prepare(
+        `SELECT source_row, kind, value, observed_date, raw_snippet
+         FROM observations
+         WHERE import_batch_id = ?
+         ORDER BY source_row, id
+         LIMIT 260`
+      )
+      .all(batch) as Array<Record<string, unknown>>;
+
+    return {
+      dashboard,
+      trials: trials.map((row) => ({
+        sourceRow: Number(row.source_row),
+        accession: String(row.p_accession),
+        sourceAccession: String(row.source_accession),
+        species: String(row.species),
+        treatment: String(row.treatment),
+        num: row.num === null ? null : Number(row.num),
+        pc: row.pc === null ? null : Number(row.pc),
+        lpc: row.lpc === null ? null : Number(row.lpc),
+        fourPc: row.four_pc === null ? null : Number(row.four_pc),
+        status: row.status as string | null,
+        notes: row.notes as string | null
+      })),
+      observations: observations.map((row) => ({
+        sourceRow: Number(row.source_row),
+        kind: String(row.kind),
+        value: row.value === null ? null : Number(row.value),
+        date: row.observed_date as string | null,
+        rawSnippet: String(row.raw_snippet)
+      }))
+    };
   }
 
   close(): void {

@@ -43,4 +43,16 @@ describe("parseObservationsFromTrial", () => {
     expect(observations[1].value).toBe(23);
     expect(observations[2].value).toBe(14);
   });
+
+  it("does not mistake fractions in notes for observation dates", () => {
+    const observations = parseObservationsFromTrial({
+      ...baseTrial,
+      notes: "1/2 of seedlings survived; germinated = 12",
+      pcd: null
+    });
+    expect(observations).toHaveLength(1);
+    expect(observations[0].kind).toBe("germinated");
+    expect(observations[0].date).toBeNull();
+    expect(observations[0].confidence).toBe("medium");
+  });
 });

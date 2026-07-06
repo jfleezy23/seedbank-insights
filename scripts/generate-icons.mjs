@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
 import { chromium } from "playwright";
 
 const root = process.cwd();
@@ -10,12 +9,13 @@ const outDir = path.join(root, "assets/branding");
 const iconsetDir = path.join(outDir, "app-icon.iconset");
 
 async function renderPng(size, outPath) {
+  const svgSource = await readFile(svgPath, "utf8");
+  const svgUrl = `data:image/svg+xml;base64,${Buffer.from(svgSource).toString("base64")}`;
   const browser = await chromium.launch();
   const page = await browser.newPage({
     viewport: { width: size, height: size },
     deviceScaleFactor: 1
   });
-  const svgUrl = pathToFileURL(svgPath).href;
   await page.setContent(`
     <!doctype html>
     <html>
@@ -24,6 +24,10 @@ async function renderPng(size, outPath) {
       </body>
     </html>
   `);
+  await page.locator("img").evaluate((image) => {
+    if (!(image instanceof HTMLImageElement)) return;
+    return image.decode();
+  });
   await page.screenshot({ path: outPath, omitBackground: true });
   await browser.close();
 }

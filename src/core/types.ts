@@ -72,6 +72,42 @@ export interface DataQualityIssue {
   affectedRows: number;
 }
 
+export interface SpeciesInsightEvidence {
+  sourceRow: number;
+  accession: string;
+  treatment: string;
+  observation: string;
+}
+
+export interface SpeciesInsight {
+  species: string;
+  deterministicConfidence: ConfidenceLabel;
+  summary: string;
+  keyFindings: string[];
+  nextSteps: string[];
+  confidenceCaveat: string;
+  evidence: SpeciesInsightEvidence[];
+  generatedBy: "openai" | "deterministic";
+  model: string | null;
+  generatedAt: string | null;
+}
+
+export interface AiInsightStatus {
+  configured: boolean;
+  state: "not_configured" | "not_generated" | "ready" | "error";
+  message: string;
+  model: string | null;
+  generatedAt: string | null;
+}
+
+export interface AskAnswer {
+  answer: string;
+  caveats: string[];
+  citedRows: number[];
+  model: string;
+  createdAt: string;
+}
+
 export interface ImportBatchSummary {
   id?: number;
   filename: string;
@@ -104,6 +140,17 @@ export interface TreatmentSummary {
   fourPcMean: number | null;
   confidence: ConfidenceLabel;
   warning: string;
+}
+
+export interface SpeciesSummary {
+  species: string;
+  rows: number;
+  accessions: number;
+  treatments: number;
+  pcCount: number;
+  bestTreatment: string | null;
+  bestPcMean: number | null;
+  confidence: ConfidenceLabel;
 }
 
 export interface PairedComparison {
@@ -152,8 +199,11 @@ export interface DashboardData {
     observationsExtracted: number;
   };
   treatmentSummaries: TreatmentSummary[];
+  speciesSummaries: SpeciesSummary[];
   pairedComparisons: PairedComparison[];
   trialQueue: TrialQueueItem[];
   dataQualityIssues: DataQualityIssue[];
   askSuggestions: string[];
+  speciesInsights: SpeciesInsight[];
+  aiInsightStatus: AiInsightStatus;
 }

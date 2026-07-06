@@ -27,11 +27,17 @@ function round(value: number, digits = 2): number {
   return Math.round(value * factor) / factor;
 }
 
-function confidenceForTreatment(summaryRows: number, species: number, pcCount: number): ConfidenceLabel {
+function confidenceForTreatment(
+  summaryRows: number,
+  species: number,
+  pcCount: number,
+  pcMean: number | null,
+  pcGe4Rate: number | null
+): ConfidenceLabel {
   if (summaryRows <= 1 || species <= 1) return "Needs replication";
   if (pcCount < 5) return "Inconclusive";
   if (pcCount < 10 || species < 5) return "Promising";
-  return "Promising";
+  return pcMean !== null && pcMean >= 4 && (pcGe4Rate ?? 0) >= 0.6 ? "Strong signal" : "Promising";
 }
 
 export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
@@ -48,7 +54,11 @@ export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
       const fourPcValues = rows.map((row) => row.fourPc).filter(definedScore);
       const species = new Set(rows.map((row) => row.species)).size;
       const accessions = new Set(rows.map((row) => row.pAccession)).size;
-      const confidence = confidenceForTreatment(rows.length, species, pcValues.length);
+      const pcMean = mean(pcValues) === null ? null : round(mean(pcValues) as number, 2);
+      const pcGe4Rate = pcValues.length
+        ? round(pcValues.filter((value) => value >= 4).length / pcValues.length, 3)
+        : null;
+      const confidence = confidenceForTreatment(rows.length, species, pcValues.length, pcMean, pcGe4Rate);
       const warning =
         confidence === "Needs replication"
           ? "One-off or nearly one-off treatment result. Do not generalize yet."
@@ -61,11 +71,9 @@ export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
         species,
         accessions,
         pcCount: pcValues.length,
-        pcMean: mean(pcValues) === null ? null : round(mean(pcValues) as number, 2),
+        pcMean,
         pcMedian: median(pcValues),
-        pcGe4Rate: pcValues.length
-          ? round(pcValues.filter((value) => value >= 4).length / pcValues.length, 3)
-          : null,
+        pcGe4Rate,
         lpcMean: mean(lpcValues) === null ? null : round(mean(lpcValues) as number, 2),
         fourPcMean: mean(fourPcValues) === null ? null : round(mean(fourPcValues) as number, 2),
         confidence,
@@ -163,16 +171,19 @@ export function pairedComparison(
   const examples: PairedComparison["examples"] = [];
   const diffs: number[] = [];
   for (const rows of byAccession.values()) {
-    const base = rows.find((row) => row.treatment === baseline && definedScore(row.pc));
-    const candidate = rows.find((row) => row.treatment === treatment && definedScore(row.pc));
-    if (!base || !candidate || !definedScore(base.pc) || !definedScore(candidate.pc)) continue;
-    const diff = candidate.pc - base.pc;
+    const baseRows = rows.filter((row) => row.treatment === baseline && definedScore(row.pc));
+    const candidateRows = rows.filter((row) => row.treatment === treatment && definedScore(row.pc));
+    const baseScore = round(mean(baseRows.map((row) => row.pc).filter(definedScore)) ?? Number.NaN, 2);
+    const candidateScore = round(mean(candidateRows.map((row) => row.pc).filter(definedScore)) ?? Number.NaN, 2);
+    const candidate = candidateRows[0];
+    if (!candidate || !Number.isFinite(baseScore) || !Number.isFinite(candidateScore)) continue;
+    const diff = round(candidateScore - baseScore, 2);
     diffs.push(diff);
     examples.push({
       accession: candidate.pAccession,
       species: candidate.species,
-      baselineScore: base.pc,
-      treatmentScore: candidate.pc,
+      baselineScore: baseScore,
+      treatmentScore: candidateScore,
       diff
     });
   }

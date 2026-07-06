@@ -22,4 +22,19 @@ describe("parseTreatment", () => {
     const parsed = parseTreatment("CS+MYSTERY");
     expect(parsed.warnings).toContain("Unmapped treatment token: MYSTERY");
   });
+
+  it("parses whitespace-delimited treatment tokens", () => {
+    const parsed = parseTreatment("WS CS");
+    expect(parsed.tokens).toEqual(["WS", "CS"]);
+    expect(parsed.hasWarm).toBe(true);
+    expect(parsed.hasCold).toBe(true);
+    expect(parsed.warnings).toHaveLength(0);
+  });
+
+  it("treats numbered GA tokens as gibberellic acid treatments", () => {
+    const parsed = parseTreatment("GA3 + CS");
+    expect(parsed.hasGa).toBe(true);
+    expect(parsed.hasCold).toBe(true);
+    expect(parsed.warnings).toHaveLength(0);
+  });
 });

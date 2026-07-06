@@ -33,10 +33,32 @@ Do not claim SCA, tests, build, or review passed unless they actually ran and th
 
 For desktop apps, packaging is not launch verification. Before claiming a packaged app works, run the packaged executable/app bundle itself, observe that the main window loads, and capture or inspect evidence from the launched app. `electron-builder --dir` only proves packaging completed; it does not prove the app starts.
 
+## Antigravity Advisory Reviewer
+
+- Use Antigravity through the `agy` CLI as an advisory reviewer or research partner only. It may provide feedback, hypotheses, critique, optimization ideas, and test suggestions, but it must not write code, patch files, format files, stage changes, commit, or run broad cleanup.
+- Antigravity feedback never replaces the primary agent's own inspection, research, testing, or review. Evaluate its output against the code, tests, project guardrails, and deterministic evidence before acting on it.
+- Use Antigravity when stuck on science/statistical reasoning, germination-domain interpretation, tricky performance or optimization questions, bug-hunt brainstorming, and prototype UI/design critique.
+- Use Antigravity as the required independent review agent before committing code changes when `agy` is available. Run it after the primary agent has inspected its own diff and before staging. Treat findings as advisory until independently verified.
+- Use `Gemini 3.5 Flash (High)` only, unless the user explicitly approves a different model. Do not use Claude models for routine repo review because of cost, and do not silently fall back to other Gemini models. Verify availability with `agy models` when setup is uncertain.
+- Prefer a bounded, non-interactive CLI invocation from the repo root. If the local CLI syntax differs, check `agy --help` and preserve the same model and advisory-only constraints.
+
+Example shape; replace the explicit paths with the files under review.
+
+```sh
+agy --model "Gemini 3.5 Flash (High)" -p "You are an independent advisory reviewer for this repo. Do not write code, edit files, stage changes, commit, or request permissions to modify the workspace. Review the provided context and return prioritized findings with file/line references where possible, concrete risks, missing tests, performance or UI concerns, and explicit uncertainty. Focus on correctness, science/statistics guardrails, security, maintainability, and regressions. Context follows:
+
+$(git diff -- src/core/statistics.ts tests/unit/statistics.test.ts)"
+```
+
+- Give Antigravity only the context it needs: explicit diffs, specific files, focused questions, screenshots, or summarized data profiles. Do not send API keys, tokens, passwords, raw PSU workbooks, sensitive local data, or unredacted proprietary data.
+- If `agy` is unavailable, the requested model is unavailable, or the CLI asks for unsafe permissions, record that Antigravity review could not run and perform the best available fallback review. Do not claim Antigravity review passed unless it actually ran and the output was checked.
+
 ## Security And AI
 
 - OpenAI is assistive only. Deterministic code owns calculations, confidence labels, and evidence selection.
 - Do not commit API keys. Store user-provided keys only through Electron safe storage or an equivalent OS-backed secret mechanism.
+- Treat API keys, tokens, passwords, and credentials as secrets even if the user pastes them into chat. Do not repeat, log, print, place in shell history, write to files, include in screenshots, or pass through renderer code.
+- When checking whether secrets were accidentally written, prefer filename-only scans or redacted output. Never echo the secret value back to the user.
 - AI summaries must not upgrade confidence labels or hide data-quality warnings.
 
 ## Statistical Guardrails
@@ -74,3 +96,10 @@ Append new implementation or data insights here as they are discovered.
 - Vite apps loaded from an Electron `file://` bundle need relative built asset URLs (`base: "./"`); default absolute `/assets/...` paths can package successfully but render a blank main window.
 - Electron Playwright smoke tests must not assume `firstWindow()` is visible or user-facing. Hidden renderer windows can race splash windows; select windows by visibility plus URL/text or DOM evidence.
 - Startup work that can throw, such as SQLite/native module initialization, should happen after the splash is visible and should fail into an explicit launch-error window or dialog, not a blank main shell.
+- Official PSU signature assets should stay as replaceable files under `assets/branding` and be rendered unchanged in white lockup/badge areas; do not crop, recolor, redraw, or embed them into generated artwork.
+- Sidebar navigation must render real, distinct workspaces. A selected nav label without a content change is a regression for this prototype.
+- Header import should try deterministic exact/synonym matching first. AI header mapping is only a fallback for ambiguous or missing headers and must not block deterministic imports if it fails.
+- The demo Ask feature may make live OpenAI calls, but only from Electron main with bounded spreadsheet context. Renderer code should read cached dashboard data or invoke narrow IPC; it must not hold API keys.
+- AI-generated species or Ask text must preserve deterministic confidence labels and cited row evidence. Treat any model output that attempts to add or upgrade confidence as malformed.
+- The provided PSU signature reference included guide labels/measurement marks. The committed UI asset should be cropped to the real signature only so no `Logmark`/`Logotype` guide text appears in the app.
+- Icon verification must inspect the rendered pixels, not just file existence or bundle metadata. A broken SVG-to-PNG rasterization can still produce valid-looking files that show as blank/default app icons.
