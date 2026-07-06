@@ -38,20 +38,20 @@ For desktop apps, packaging is not launch verification. Before claiming a packag
 - Use Antigravity through the `agy` CLI as an advisory reviewer or research partner only. It may provide feedback, hypotheses, critique, optimization ideas, and test suggestions, but it must not write code, patch files, format files, stage changes, commit, or run broad cleanup.
 - Antigravity feedback never replaces the primary agent's own inspection, research, testing, or review. Evaluate its output against the code, tests, project guardrails, and deterministic evidence before acting on it.
 - Use Antigravity when stuck on science/statistical reasoning, germination-domain interpretation, tricky performance or optimization questions, bug-hunt brainstorming, and prototype UI/design critique.
-- Use Antigravity as the required independent review agent before committing code changes when `agy` is available. Run it after the primary agent has inspected its own diff and before staging. Treat findings as advisory until independently verified.
+- Use Antigravity as the required independent review agent before committing code changes when `agy` is available. Run it after the primary agent has inspected its own diff and before staging when practical; if work is already staged, review the exact staged diff before committing. Treat findings as advisory until independently verified.
 - Use `Gemini 3.5 Flash (High)` only, unless the user explicitly approves a different model. Do not use Claude models for routine repo review because of cost, and do not silently fall back to other Gemini models. Verify availability with `agy models` when setup is uncertain.
-- Prefer a bounded, non-interactive CLI invocation from the repo root. If the local CLI syntax differs, check `agy --help` and preserve the same model and advisory-only constraints.
+- Prefer a bounded, non-interactive CLI invocation from the repo root. Inspect `git status` first, then send the correct explicit diff: `git diff -- path/to/file ...` for unstaged-only changes, `git diff --cached -- path/to/file ...` for staged-only commit review, `git diff HEAD -- path/to/file ...` when the review should include tracked staged plus unstaged changes, and `git diff --no-index /dev/null path/to/new-file` for untracked files. Never leave the path list empty. If the local CLI syntax differs, check `agy --help` and preserve the same model and advisory-only constraints.
 
 Example shape; replace the explicit paths with the files under review.
 
 ```sh
 agy --model "Gemini 3.5 Flash (High)" -p "You are an independent advisory reviewer for this repo. Do not write code, edit files, stage changes, commit, or request permissions to modify the workspace. Review the provided context and return prioritized findings with file/line references where possible, concrete risks, missing tests, performance or UI concerns, and explicit uncertainty. Focus on correctness, science/statistics guardrails, security, maintainability, and regressions. Context follows:
 
-$(git diff -- src/core/statistics.ts tests/unit/statistics.test.ts)"
+$(git diff HEAD -- src/core/statistics.ts tests/unit/statistics.test.ts)"
 ```
 
 - Give Antigravity only the context it needs: explicit diffs, specific files, focused questions, screenshots, or summarized data profiles. Do not send API keys, tokens, passwords, raw PSU workbooks, sensitive local data, or unredacted proprietary data.
-- If `agy` is unavailable, the requested model is unavailable, or the CLI asks for unsafe permissions, record that Antigravity review could not run and perform the best available fallback review. Do not claim Antigravity review passed unless it actually ran and the output was checked.
+- If `agy` is unavailable, the requested model is unavailable, or the CLI asks for unsafe permissions, record that Antigravity review could not run. Use another separate reviewer or agent if available; if no independent reviewer is available, the independent-review gate remains unsatisfied until the user explicitly approves a bypass. Self-review is useful to report, but it is not a replacement for the independent gate. Do not claim Antigravity review passed unless it actually ran and the output was checked.
 
 ## Security And AI
 
