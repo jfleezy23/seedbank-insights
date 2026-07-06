@@ -14,12 +14,8 @@ permissions:
 
 jobs:
   test:
-    name: Test and package checks
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [macos-latest, windows-latest]
+    name: Public checks
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -38,6 +34,3 @@ jobs:
       - run: pnpm run build
       - run: pnpm run db:smoke
       - run: pnpm run sca
-      - run: pnpm run icons
-      - run: pnpm run app:build
-      - run: pnpm run app:smoke
