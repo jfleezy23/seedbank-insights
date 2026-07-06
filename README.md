@@ -127,7 +127,7 @@ pnpm run build
 pnpm run sca
 ```
 
-Use Antigravity advisory review with `Gemini 3.5 Flash (High)` before committing code changes when `agy` is available, then independently verify or reject its findings.
+Inspect the diff before committing and keep validation notes with the change.
 
 ## License
 

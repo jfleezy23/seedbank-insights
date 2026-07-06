@@ -39,10 +39,9 @@ Then launch the packaged app bundle/executable itself and inspect evidence that 
 
 ## Review Gate
 
-- Inspect the diff yourself before staging.
-- Run Antigravity advisory review with `Gemini 3.5 Flash (High)` when `agy` is available.
-- Treat Antigravity findings as advisory until independently verified.
-- Do not proceed past the independent-review gate unless the review ran or the user explicitly approves a bypass.
+- Inspect the diff before staging.
+- Confirm the validation output matches the files being published.
+- Confirm any user-facing claims are backed by implemented behavior.
 
 ## Publish Gate
 

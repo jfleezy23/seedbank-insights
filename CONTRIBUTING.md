@@ -8,7 +8,7 @@ SeedBank Insights is early-stage research tooling. Contributions should preserve
 - Do not commit raw workbooks, `.env` files, SQLite databases, logs, packaged output, screenshots from failed local runs, or generated release artifacts.
 - Prefer synthetic fixtures and deterministic tests over raw source data.
 - Keep OpenAI calls in Electron main behind narrow IPC. Renderer code must not persist API keys or use them for model calls.
-- Do not let AI-generated prose upgrade deterministic confidence labels or hide data-quality warnings.
+- Do not let OpenAI prose upgrade deterministic confidence labels or hide data-quality warnings.
 
 ## Local Setup
 
@@ -53,9 +53,7 @@ Pull requests should include:
 - the exact validation commands that ran
 - a note on raw data and secrets
 - screenshots or layout evidence for UI work
-- independent review notes when code changed
-
-Use Antigravity advisory review with `Gemini 3.5 Flash (High)` when available, but treat its output as feedback to evaluate, not authority.
+- review notes for any risky or user-facing behavior change
 
 ## Review Priorities
 

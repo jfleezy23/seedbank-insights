@@ -19,18 +19,6 @@ Validation details:
 paste command lines and pass/warn/fail summaries here
 ```
 
-## Independent Review
-
-- [ ] Antigravity review with `Gemini 3.5 Flash (High)` ran
-- [ ] separate reviewer/agent review ran
-- [ ] independent-review gate intentionally bypassed by user
-
-Review notes:
-
-```text
-summarize accepted, rejected, or deferred findings
-```
-
 ## Security And Data
 
 - [ ] secrets, credentials, and tokens were not added

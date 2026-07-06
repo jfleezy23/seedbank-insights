@@ -10,7 +10,7 @@ The app helps answer:
 - Which species have enough signal to review more deeply?
 - Which accessions need attention in the trial queue?
 - Which workbook rows contain warnings or ambiguous data?
-- What can an AI assistant summarize without overstating the deterministic evidence?
+- What optional OpenAI summaries can cover without overstating deterministic evidence?
 
 ## Intended Users
 
