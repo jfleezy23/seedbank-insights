@@ -1,6 +1,6 @@
 # Brand Notes
 
-SeedBank Insights uses a PSU-inspired prototype palette from the user-provided plan:
+SeedBank Insights uses a restrained seed-bank research palette inspired by the user's planning notes:
 
 - PSU Green: `#6d8d24`
 - Electric Green: `#cfd82d`
@@ -14,6 +14,9 @@ Implementation notes:
 - Permissioned official PSU assets can replace files under `assets/branding/`.
 - Current raster imagery is generated prototype art with no official marks or institutional text.
 - The app icon is a custom seed-packet/sprout motif using the PSU-inspired palette.
+- Public copy should describe the project as independent unless a future agreement says otherwise.
+- Screenshots should show real app surfaces, not decorative mockups, once release validation starts.
+- Keep the UI dense and review-oriented: this is a workbench, not a marketing landing page.
 
 Source references from planning:
 

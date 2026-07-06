@@ -15,6 +15,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "playwright test",
+    "secret:scan": "node scripts/check-secrets.mjs",
     "sca": "node scripts/run-sca.mjs",
     "icons": "node scripts/generate-icons.mjs",
     "db:smoke": "pnpm run build:electron && electron scripts/electron-db-smoke.cjs",
