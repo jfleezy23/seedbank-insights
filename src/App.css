@@ -383,6 +383,11 @@ button:disabled {
   background: var(--danger);
 }
 
+.confidence {
+  justify-content: center;
+  text-align: center;
+}
+
 .comparison-grid {
   display: grid;
   grid-template-columns: 185px 1fr;
