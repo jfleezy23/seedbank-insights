@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   BarChart3,
@@ -53,7 +53,30 @@ function AiStatusPill({ dashboard }: { dashboard: DashboardData }) {
   );
 }
 
-function SpeciesExplorer({ dashboard }: { dashboard: DashboardData }) {
+function SpeciesExplorer({
+  dashboard,
+  aiConfigured,
+  generatingSpeciesInsights,
+  actionDisabled,
+  onGenerateSpeciesInsights
+}: {
+  dashboard: DashboardData;
+  aiConfigured: boolean;
+  generatingSpeciesInsights: boolean;
+  actionDisabled: boolean;
+  onGenerateSpeciesInsights: () => void;
+}) {
+  const hasBatch = Boolean(dashboard.batch);
+  const hasInsights = dashboard.speciesInsights.length > 0;
+  const canGenerate = aiConfigured && hasBatch && !actionDisabled;
+  const emptyTitle = !hasBatch
+    ? "Import a workbook before generating species insights."
+    : !aiConfigured
+      ? "Add an OpenAI key in Settings to generate species insights."
+      : generatingSpeciesInsights
+        ? "Generating species insights from the imported workbook..."
+        : "Generate AI species insights for this import.";
+
   return (
     <section className="view-stack">
       <section className="panel species-insights-panel">
@@ -62,7 +85,19 @@ function SpeciesExplorer({ dashboard }: { dashboard: DashboardData }) {
             <h2>Species insights</h2>
             <p>{dashboard.aiInsightStatus.message}</p>
           </div>
-          <AiStatusPill dashboard={dashboard} />
+          <div className="species-actions">
+            <AiStatusPill dashboard={dashboard} />
+            {aiConfigured && hasBatch ? (
+              <button type="button" onClick={onGenerateSpeciesInsights} disabled={!canGenerate}>
+                <BrainCircuit size={16} />
+                {generatingSpeciesInsights
+                  ? "Generating..."
+                  : hasInsights
+                    ? "Regenerate insights"
+                    : "Generate species insights"}
+              </button>
+            ) : null}
+          </div>
         </div>
         {dashboard.speciesInsights.length ? (
           <div className="species-insight-grid">
@@ -94,7 +129,7 @@ function SpeciesExplorer({ dashboard }: { dashboard: DashboardData }) {
         ) : (
           <div className="empty-state">
             <BrainCircuit size={22} />
-            <strong>Cached AI species insights will appear after an import with an API key.</strong>
+            <strong>{emptyTitle}</strong>
             <span>Deterministic species summaries remain available below.</span>
           </div>
         )}
@@ -207,7 +242,14 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
+  const [generatingSpeciesInsights, setGeneratingSpeciesInsights] = useState(false);
   const [message, setMessage] = useState("Sample data loaded. Import the PSU workbook for live analysis.");
+  const activeBatchIdRef = useRef<number | null>(sampleDashboard.batch?.id ?? null);
+
+  function applyDashboard(next: DashboardData) {
+    activeBatchIdRef.current = next.batch?.id ?? null;
+    setDashboard(next);
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -220,7 +262,7 @@ function App() {
       if (cancelled) return;
       setAiConfigured(status.configured);
       setSafeStorageAvailable(status.safeStorageAvailable);
-      setDashboard(current);
+      applyDashboard(current);
       if (current.batch) {
         setMessage(`Loaded ${current.batch.filename} from local SQLite.`);
       }
@@ -231,9 +273,14 @@ function App() {
     };
   }, []);
 
+  useEffect(() => {
+    activeBatchIdRef.current = dashboard.batch?.id ?? null;
+  }, [dashboard.batch?.id]);
+
   const bestComparison = dashboard.pairedComparisons[0];
   const donePercent = Math.round(dashboard.metrics.doneRate * 100);
   const batchLabel = dashboard.batch?.filename ?? "No workbook imported";
+  const busy = loading || savingKey || generatingSpeciesInsights;
 
   const metricCards = useMemo(
     () => [
@@ -262,12 +309,13 @@ function App() {
   );
 
   async function importWorkbook() {
+    if (!window.seedbank || busy) return;
     setLoading(true);
     setMessage("Importing workbook and recomputing deterministic insights...");
     try {
-      const next = await window.seedbank?.selectWorkbook();
+      const next = await window.seedbank.selectWorkbook();
       if (next) {
-        setDashboard(next);
+        applyDashboard(next);
         setAiConfigured(next.aiInsightStatus.configured);
         setMessage(`Imported ${next.batch?.filename ?? "workbook"}. ${next.aiInsightStatus.message}`);
       } else {
@@ -281,12 +329,13 @@ function App() {
   }
 
   async function importLocalDefault() {
+    if (!window.seedbank || busy) return;
     setLoading(true);
     setMessage("Looking for P_accessions_new.xlsx in the repo...");
     try {
-      const next = await window.seedbank?.importLocalDefaultWorkbook();
+      const next = await window.seedbank.importLocalDefaultWorkbook();
       if (next) {
-        setDashboard(next);
+        applyDashboard(next);
         setAiConfigured(next.aiInsightStatus.configured);
         setMessage(`Imported ${next.batch?.filename ?? "local workbook"}. ${next.aiInsightStatus.message}`);
       } else {
@@ -299,15 +348,60 @@ function App() {
     }
   }
 
-  async function saveOpenAiKey() {
-    if (!window.seedbank || !apiKeyInput.trim()) return;
-    setSavingKey(true);
+  async function runSpeciesInsightGeneration(requestedBatchId: number, force: boolean, existingInsights: boolean) {
+    if (!window.seedbank) return;
+    setGeneratingSpeciesInsights(true);
+    setSelectedNav("Species Explorer");
+    setMessage(existingInsights ? "Regenerating cached species insights..." : "Generating species insights from the current import...");
     try {
-      const status = await window.seedbank.saveOpenAiKey(apiKeyInput.trim());
+      const next = await window.seedbank.generateSpeciesInsights(force, requestedBatchId);
+      if ((next.batch?.id ?? null) !== activeBatchIdRef.current) {
+        setMessage("Generated species insights for the prior workbook, but a newer import is active.");
+        return;
+      }
+      applyDashboard(next);
+      setAiConfigured(next.aiInsightStatus.configured);
+      setMessage(next.aiInsightStatus.message);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to generate species insights.");
+    } finally {
+      setGeneratingSpeciesInsights(false);
+    }
+  }
+
+  async function saveOpenAiKey() {
+    if (!window.seedbank || !apiKeyInput.trim() || busy) return;
+    const requestedBatchId = dashboard.batch?.id ?? null;
+    setSavingKey(true);
+    setMessage("Saving OpenAI key...");
+    try {
+      const status = await window.seedbank.saveOpenAiKey(apiKeyInput.trim(), requestedBatchId ?? undefined);
       setAiConfigured(status.configured);
       setSafeStorageAvailable(status.safeStorageAvailable);
+      if (status.dashboard) {
+        const responseBatchId = status.dashboard.batch?.id ?? null;
+        const activeBatchId = activeBatchIdRef.current;
+        if (requestedBatchId !== activeBatchId || (requestedBatchId !== null && responseBatchId !== activeBatchId)) {
+          setMessage("OpenAI key saved. A newer workbook is active, so older dashboard state was not displayed.");
+          setApiKeyInput("");
+          setSettingsOpen(false);
+          return;
+        }
+        applyDashboard(status.dashboard);
+        if (status.dashboard.batch) {
+          if (status.dashboard.speciesInsights.length) {
+            setMessage("OpenAI key saved. Ask is ready, and cached species insights are available.");
+          } else {
+            setMessage("OpenAI key saved. Ask is ready, and species insights can be generated for this import.");
+          }
+        } else {
+          setMessage("OpenAI key saved. Import a workbook to use AI features.");
+        }
+      } else {
+        setMessage("OpenAI key saved. Import a workbook to use AI features.");
+      }
       setApiKeyInput("");
-      setMessage("OpenAI key saved. Species insights will generate on the next spreadsheet import.");
+      setSettingsOpen(false);
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save OpenAI key.");
     } finally {
@@ -315,13 +409,29 @@ function App() {
     }
   }
 
+  async function generateSpeciesInsights() {
+    const requestedBatchId = dashboard.batch?.id ?? null;
+    if (requestedBatchId === null || busy) return;
+    await runSpeciesInsightGeneration(requestedBatchId, dashboard.speciesInsights.length > 0, dashboard.speciesInsights.length > 0);
+  }
+
   async function clearOpenAiKey() {
-    if (!window.seedbank) return;
+    if (!window.seedbank || busy) return;
+    const requestedBatchId = dashboard.batch?.id ?? null;
     setSavingKey(true);
     try {
-      const status = await window.seedbank.clearOpenAiKey();
+      const status = await window.seedbank.clearOpenAiKey(requestedBatchId ?? undefined);
       setAiConfigured(status.configured);
       setSafeStorageAvailable(status.safeStorageAvailable);
+      if (status.dashboard) {
+        if (requestedBatchId !== activeBatchIdRef.current) {
+          setMessage("OpenAI key cleared. A newer workbook is active, so older dashboard state was not displayed.");
+          setApiKeyInput("");
+          return;
+        }
+        applyDashboard(status.dashboard);
+      }
+      setApiKeyInput("");
       setMessage("OpenAI key cleared. The app remains fully local.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to clear OpenAI key.");
@@ -398,15 +508,15 @@ function App() {
             <p>{batchLabel}</p>
           </div>
           <div className="topbar-actions">
-            <button type="button" onClick={importLocalDefault} disabled={loading}>
+            <button type="button" onClick={importLocalDefault} disabled={busy}>
               <Search size={17} />
               Load local workbook
             </button>
-            <button className="primary" type="button" onClick={importWorkbook} disabled={loading}>
+            <button className="primary" type="button" onClick={importWorkbook} disabled={busy}>
               <FileSpreadsheet size={17} />
               Import spreadsheet
             </button>
-            <button type="button" aria-label="Settings" onClick={() => setSettingsOpen(true)}>
+            <button type="button" aria-label="Settings" onClick={() => setSettingsOpen(true)} disabled={busy}>
               <Settings2 size={18} />
             </button>
           </div>
@@ -423,11 +533,11 @@ function App() {
                 <AiStatusPill dashboard={dashboard} />
               </div>
               <div className="import-actions">
-                <button type="button" onClick={importLocalDefault} disabled={loading}>
+                <button type="button" onClick={importLocalDefault} disabled={busy}>
                   <Search size={17} />
                   Load local workbook
                 </button>
-                <button type="button" onClick={importWorkbook} disabled={loading}>
+                <button type="button" onClick={importWorkbook} disabled={busy}>
                   <FileSpreadsheet size={17} />
                   Import spreadsheet
                 </button>
@@ -451,7 +561,15 @@ function App() {
           </>
         )}
 
-        {selectedNav === "Species Explorer" && <SpeciesExplorer dashboard={dashboard} />}
+        {selectedNav === "Species Explorer" && (
+          <SpeciesExplorer
+            dashboard={dashboard}
+            aiConfigured={aiConfigured}
+            generatingSpeciesInsights={generatingSpeciesInsights}
+            actionDisabled={busy}
+            onGenerateSpeciesInsights={generateSpeciesInsights}
+          />
+        )}
 
         {selectedNav === "Treatment Comparator" && (
           <section className="view-grid two-column">
@@ -500,7 +618,7 @@ function App() {
         apiKeyInput={apiKeyInput}
         safeStorageAvailable={safeStorageAvailable}
         aiConfigured={aiConfigured}
-        saving={savingKey}
+        saving={busy}
         onClose={() => setSettingsOpen(false)}
         onInput={setApiKeyInput}
         onSave={saveOpenAiKey}

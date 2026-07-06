@@ -2,6 +2,7 @@ const { mkdtempSync } = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
+const BetterSqlite = require("better-sqlite3");
 const { SeedBankDatabase } = require("../dist-electron/electron/main/database.js");
 const { parseTreatment } = require("../dist-electron/src/core/treatments.js");
 
@@ -49,7 +50,17 @@ function importResult(filename) {
       warnings: ["Synthetic warning"]
     },
     trials,
-    observations: [],
+    observations: [
+      {
+        trialId: trials[1].id,
+        sourceRow: 3,
+        date: "2026-03-16",
+        kind: "pc",
+        value: 5,
+        rawSnippet: "3/16/2026 PC 5",
+        confidence: "high"
+      }
+    ],
     issues: [
       {
         severity: "high",
@@ -76,6 +87,52 @@ try {
   if (!issueTitles.includes("Synthetic import issue")) {
     throw new Error("Persisted import issue was not surfaced");
   }
+  const reconstructed = db.getImportResult(2);
+  if (!reconstructed) throw new Error("Expected reconstructed import result");
+  if (reconstructed.trials.length !== 2) throw new Error("Reconstructed trial count changed");
+  if (reconstructed.observations.length !== 1) throw new Error("Reconstructed observation count changed");
+  if (reconstructed.issues.length !== 1) throw new Error("Reconstructed import issue count changed");
+  if (reconstructed.batch.warnings[0] !== "Synthetic warning") {
+    throw new Error("Reconstructed batch warnings changed");
+  }
+
+  const legacyPath = path.join(dir, "legacy.sqlite");
+  const legacyDb = new SeedBankDatabase(legacyPath);
+  const legacySaved = legacyDb.saveImport(importResult("legacy.xlsx"));
+  legacyDb.close();
+
+  const rawLegacy = new BetterSqlite(legacyPath);
+  rawLegacy.pragma("foreign_keys = OFF");
+  rawLegacy.exec(`
+    CREATE TABLE observations_legacy (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      trial_id TEXT NOT NULL,
+      source_row INTEGER NOT NULL,
+      observed_date TEXT,
+      kind TEXT NOT NULL,
+      value REAL,
+      raw_snippet TEXT NOT NULL,
+      confidence TEXT NOT NULL
+    );
+    INSERT INTO observations_legacy (
+      id, trial_id, source_row, observed_date, kind, value, raw_snippet, confidence
+    )
+    SELECT id, trial_id, source_row, observed_date, kind, value, raw_snippet, confidence
+    FROM observations;
+    DROP TABLE observations;
+    ALTER TABLE observations_legacy RENAME TO observations;
+    PRAGMA user_version = 1;
+  `);
+  rawLegacy.close();
+
+  const migratedLegacy = new SeedBankDatabase(legacyPath);
+  const migratedImport = migratedLegacy.getImportResult(legacySaved.batch?.id);
+  if (!migratedImport) throw new Error("Expected migrated legacy import result");
+  if (migratedImport.observations.length !== 1) {
+    throw new Error("Legacy observation import_batch_id migration did not preserve observations");
+  }
+  migratedLegacy.close();
+
   console.log("Electron SQLite smoke passed");
 } finally {
   db.close();

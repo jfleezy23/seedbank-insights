@@ -286,6 +286,11 @@ function loadOpenAiKey(): string | null {
   }
 }
 
+function optionalBatchId(value: unknown): number | undefined {
+  const batchId = Number(value);
+  return Number.isSafeInteger(batchId) && batchId > 0 ? batchId : undefined;
+}
+
 function openAiConfigured(): boolean {
   return fs.existsSync(keyPath()) && safeStorage.isEncryptionAvailable();
 }
@@ -305,7 +310,9 @@ function withOpenAiStatus(dashboard: DashboardData, override?: Partial<AiInsight
       ? {
           configured,
           state: "not_generated",
-          message: "OpenAI is configured. Species insights will generate on the next spreadsheet import.",
+          message: dashboard.batch
+            ? "OpenAI is configured. Generate species insights for this import."
+            : "OpenAI is configured. Import a workbook to generate species insights.",
           model: OPENAI_INSIGHT_MODEL,
           generatedAt: null
         }
@@ -335,6 +342,71 @@ async function saveImportAndMaybeGenerateAi(result: ImportResult): Promise<Dashb
     return withOpenAiStatus(saved, {
       state: "error",
       message,
+      model: OPENAI_INSIGHT_MODEL,
+      generatedAt: null
+    });
+  }
+}
+
+async function generateSpeciesInsightsForBatch({
+  batchId,
+  force = false
+}: {
+  batchId?: number;
+  force?: boolean;
+} = {}): Promise<DashboardData> {
+  const current = getDatabase().getDashboard(batchId);
+  const activeBatchId = current.batch?.id;
+  const apiKey = loadOpenAiKey();
+
+  if (!activeBatchId) {
+    return withOpenAiStatus(current, {
+      state: apiKey ? "not_generated" : "not_configured",
+      message: apiKey
+        ? "Import a workbook before generating species insights."
+        : "OpenAI is not configured. Add an API key in Settings.",
+      model: apiKey ? OPENAI_INSIGHT_MODEL : null,
+      generatedAt: null
+    });
+  }
+
+  if (!apiKey) {
+    return withOpenAiStatus(current, {
+      state: "not_configured",
+      message: "OpenAI is not configured. Add an API key in Settings.",
+      model: null,
+      generatedAt: null
+    });
+  }
+
+  if (!force && current.speciesInsights.length) return withOpenAiStatus(current);
+
+  const importResult = getDatabase().getImportResult(activeBatchId);
+  if (!importResult) {
+    return withOpenAiStatus(current, {
+      state: "error",
+      message: "Could not reconstruct the requested import batch from local SQLite.",
+      model: OPENAI_INSIGHT_MODEL,
+      generatedAt: null
+    });
+  }
+
+  try {
+    const insights = await generateSpeciesInsights({
+      apiKey,
+      importResult,
+      dashboard: current
+    });
+    if (!insights.length) {
+      throw new Error("OpenAI returned no species insights.");
+    }
+    getDatabase().saveSpeciesInsights(activeBatchId, insights);
+    return withOpenAiStatus(getDatabase().getDashboard(activeBatchId));
+  } catch (error) {
+    console.warn(`OpenAI species insight generation failed: ${sanitizeErrorMessage(error)}`);
+    return withOpenAiStatus(current, {
+      state: "error",
+      message: openAiFailureMessage("species insight generation"),
       model: OPENAI_INSIGHT_MODEL,
       generatedAt: null
     });
@@ -397,7 +469,7 @@ ipcMain.handle("openai:status", () => ({
   safeStorageAvailable: safeStorage.isEncryptionAvailable()
 }));
 
-ipcMain.handle("openai:saveKey", (_event, key: string) => {
+ipcMain.handle("openai:saveKey", async (_event, key: string, batchId?: number) => {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("OS safe storage is unavailable on this machine.");
   }
@@ -406,14 +478,31 @@ ipcMain.handle("openai:saveKey", (_event, key: string) => {
     throw new Error("Enter a valid OpenAI API key.");
   }
   const encrypted = safeStorage.encryptString(normalizedKey);
-  fs.writeFileSync(keyPath(), encrypted);
-  return { configured: true, safeStorageAvailable: true };
+  await fs.promises.writeFile(keyPath(), encrypted);
+  const dashboard = getDatabase().getDashboard(optionalBatchId(batchId));
+  return {
+    configured: true,
+    safeStorageAvailable: true,
+    dashboard: withOpenAiStatus(dashboard)
+  };
 });
 
-ipcMain.handle("openai:clearKey", () => {
-  if (fs.existsSync(keyPath())) fs.unlinkSync(keyPath());
-  return { configured: false, safeStorageAvailable: safeStorage.isEncryptionAvailable() };
+ipcMain.handle("openai:clearKey", async (_event, batchId?: number) => {
+  try {
+    await fs.promises.unlink(keyPath());
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  }
+  return {
+    configured: false,
+    safeStorageAvailable: safeStorage.isEncryptionAvailable(),
+    dashboard: withOpenAiStatus(getDatabase().getDashboard(optionalBatchId(batchId)))
+  };
 });
+
+ipcMain.handle("openai:generateSpeciesInsights", async (_event, force?: boolean, batchId?: number) =>
+  generateSpeciesInsightsForBatch({ batchId: optionalBatchId(batchId), force: Boolean(force) })
+);
 
 ipcMain.handle("openai:ask", async (_event, question: string) => {
   const trimmed = String(question ?? "").trim();

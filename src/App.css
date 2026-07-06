@@ -633,6 +633,36 @@ button:disabled {
   gap: 12px;
 }
 
+.species-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.species-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 34px;
+  padding: 0 10px;
+  color: #fff;
+  background: var(--psu-green);
+  border: 1px solid var(--psu-green);
+  border-radius: 7px;
+  font-size: 12px;
+  font-weight: 800;
+  white-space: nowrap;
+}
+
+.species-actions button:disabled {
+  color: var(--muted);
+  background: #e5ead9;
+  border-color: #d8dfca;
+  cursor: not-allowed;
+}
+
 .species-card {
   display: grid;
   gap: 11px;

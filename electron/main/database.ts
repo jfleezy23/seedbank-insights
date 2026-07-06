@@ -34,6 +34,121 @@ export interface AskContext {
   }>;
 }
 
+type BatchRow = {
+  id: number;
+  filename: string;
+  imported_at: string;
+  workbook_hash: string;
+  row_count: number;
+  accession_count: number;
+  species_count: number;
+  treatment_count: number;
+  warnings_json: string;
+};
+
+function textValue(value: unknown): string {
+  return value === null || value === undefined ? "" : String(value);
+}
+
+function nullableText(value: unknown): string | null {
+  return value === null || value === undefined || value === "" ? null : String(value);
+}
+
+function numberOrNull(value: unknown): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === "string" && !value.trim()) return null;
+  const numeric = Number(value);
+  return Number.isFinite(numeric) ? numeric : null;
+}
+
+function parseJson<T>(value: unknown, fallback: T): T {
+  if (typeof value !== "string" || !value.trim()) return fallback;
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+function batchSummaryFromRow(row: BatchRow): ImportResult["batch"] & { id: number } {
+  return {
+    id: row.id,
+    filename: textValue(row.filename),
+    importedAt: textValue(row.imported_at),
+    workbookHash: textValue(row.workbook_hash),
+    rowCount: row.row_count,
+    accessionCount: row.accession_count,
+    speciesCount: row.species_count,
+    treatmentCount: row.treatment_count,
+    warnings: parseJson<string[]>(row.warnings_json, [])
+  };
+}
+
+function trialFromRow(row: Record<string, unknown>): TrialRecord {
+  return {
+    id: textValue(row.id),
+    importBatchId: Number(row.import_batch_id),
+    sourceRow: Number(row.source_row),
+    pAccession: textValue(row.p_accession),
+    sourceAccession: textValue(row.source_accession),
+    species: textValue(row.species),
+    treatment: textValue(row.treatment),
+    num: numberOrNull(row.num),
+    startDate: nullableText(row.start_date),
+    propaguleType: nullableText(row.propagule_type),
+    ttd: nullableText(row.ttd),
+    pc: numberOrNull(row.pc),
+    ced: nullableText(row.ced),
+    wsed: nullableText(row.wsed),
+    csed: nullableText(row.csed),
+    linerStart: nullableText(row.liner_start),
+    linerTtd: nullableText(row.liner_ttd),
+    lpc: numberOrNull(row.lpc),
+    fourStart: nullableText(row.four_start),
+    fourTtd: nullableText(row.four_ttd),
+    fourPc: numberOrNull(row.four_pc),
+    location: nullableText(row.location),
+    status: nullableText(row.status) as "D" | "ND" | null,
+    pcd: nullableText(row.pcd),
+    notes: nullableText(row.notes),
+    treatmentComponents: parseJson<TrialRecord["treatmentComponents"]>(row.treatment_components_json, {
+      raw: "",
+      normalized: "",
+      isControl: false,
+      hasCold: false,
+      hasWarm: false,
+      hasScarification: false,
+      hasHotWater: false,
+      hasGa: false,
+      coldDays: [],
+      warmDays: [],
+      tokens: [],
+      warnings: []
+    })
+  };
+}
+
+function observationFromRow(row: Record<string, unknown>): ParsedObservation {
+  return {
+    trialId: textValue(row.trial_id),
+    sourceRow: Number(row.source_row),
+    date: nullableText(row.observed_date),
+    kind: row.kind as ParsedObservation["kind"],
+    value: numberOrNull(row.value),
+    rawSnippet: textValue(row.raw_snippet),
+    confidence: row.confidence as ParsedObservation["confidence"]
+  };
+}
+
+function issueFromRow(row: Record<string, unknown>): DataQualityIssue {
+  return {
+    severity: row.severity as DataQualityIssue["severity"],
+    title: textValue(row.title),
+    detail: textValue(row.detail),
+    affectedRows: Number(row.affected_rows ?? 0)
+  };
+}
+
 export class SeedBankDatabase {
   private db: DatabaseType;
 
@@ -141,6 +256,30 @@ export class SeedBankDatabase {
         created_at TEXT NOT NULL,
         FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
       );
+
+    `);
+    this.ensureObservationImportBatchId();
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_observations_import_batch_id
+        ON observations(import_batch_id);
+    `);
+  }
+
+  private ensureObservationImportBatchId(): void {
+    const columns = this.db.prepare("PRAGMA table_info(observations)").all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "import_batch_id")) return;
+
+    this.db.exec(`
+      ALTER TABLE observations ADD COLUMN import_batch_id INTEGER;
+      UPDATE observations
+      SET import_batch_id = (
+        SELECT t.import_batch_id
+        FROM trials t
+        WHERE t.id = observations.trial_id
+        ORDER BY t.import_batch_id DESC
+        LIMIT 1
+      )
+      WHERE import_batch_id IS NULL;
     `);
   }
 
@@ -245,6 +384,40 @@ export class SeedBankDatabase {
     return this.getDashboard(batchId);
   }
 
+  getImportResult(batchId?: number): ImportResult | null {
+    const batch =
+      batchId ??
+      (this.db.prepare("SELECT id FROM import_batches ORDER BY id DESC LIMIT 1").get() as { id: number } | undefined)
+        ?.id;
+
+    if (!batch) return null;
+
+    const batchRow = this.db
+      .prepare("SELECT * FROM import_batches WHERE id = ?")
+      .get(batch) as BatchRow | undefined;
+
+    if (!batchRow) return null;
+
+    const trialRows = this.db
+      .prepare("SELECT * FROM trials WHERE import_batch_id = ? ORDER BY source_row")
+      .all(batch) as Array<Record<string, unknown>>;
+
+    const observationRows = this.db
+      .prepare("SELECT * FROM observations WHERE import_batch_id = ? ORDER BY id")
+      .all(batch) as Array<Record<string, unknown>>;
+
+    const issueRows = this.db
+      .prepare("SELECT * FROM data_quality_issues WHERE import_batch_id = ? ORDER BY id")
+      .all(batch) as Array<Record<string, unknown>>;
+
+    return {
+      batch: batchSummaryFromRow(batchRow),
+      trials: trialRows.map(trialFromRow),
+      observations: observationRows.map(observationFromRow),
+      issues: issueRows.map(issueFromRow)
+    };
+  }
+
   getDashboard(batchId?: number): DashboardData {
     const batch =
       batchId ??
@@ -255,19 +428,7 @@ export class SeedBankDatabase {
 
     const batchRow = this.db
       .prepare("SELECT * FROM import_batches WHERE id = ?")
-      .get(batch) as
-      | {
-          id: number;
-          filename: string;
-          imported_at: string;
-          workbook_hash: string;
-          row_count: number;
-          accession_count: number;
-          species_count: number;
-          treatment_count: number;
-          warnings_json: string;
-        }
-      | undefined;
+      .get(batch) as BatchRow | undefined;
 
     const trialRows = this.db
       .prepare("SELECT * FROM trials WHERE import_batch_id = ? ORDER BY source_row")
@@ -287,51 +448,9 @@ export class SeedBankDatabase {
       )
       .all(batch) as Array<{ payload_json: string }>;
 
-    const trials: TrialRecord[] = trialRows.map((row) => ({
-      id: String(row.id),
-      importBatchId: Number(row.import_batch_id),
-      sourceRow: Number(row.source_row),
-      pAccession: String(row.p_accession),
-      sourceAccession: String(row.source_accession),
-      species: String(row.species),
-      treatment: String(row.treatment),
-      num: row.num === null ? null : Number(row.num),
-      startDate: row.start_date as string | null,
-      propaguleType: row.propagule_type as string | null,
-      ttd: row.ttd as string | null,
-      pc: row.pc === null ? null : Number(row.pc),
-      ced: row.ced as string | null,
-      wsed: row.wsed as string | null,
-      csed: row.csed as string | null,
-      linerStart: row.liner_start as string | null,
-      linerTtd: row.liner_ttd as string | null,
-      lpc: row.lpc === null ? null : Number(row.lpc),
-      fourStart: row.four_start as string | null,
-      fourTtd: row.four_ttd as string | null,
-      fourPc: row.four_pc === null ? null : Number(row.four_pc),
-      location: row.location as string | null,
-      status: row.status as "D" | "ND" | null,
-      pcd: row.pcd as string | null,
-      notes: row.notes as string | null,
-      treatmentComponents: JSON.parse(String(row.treatment_components_json))
-    }));
-
-    const observations: ParsedObservation[] = observationRows.map((row) => ({
-      trialId: String(row.trial_id),
-      sourceRow: Number(row.source_row),
-      date: row.observed_date as string | null,
-      kind: row.kind as ParsedObservation["kind"],
-      value: row.value === null ? null : Number(row.value),
-      rawSnippet: String(row.raw_snippet),
-      confidence: row.confidence as ParsedObservation["confidence"]
-    }));
-
-    const importIssues: DataQualityIssue[] = issueRows.map((row) => ({
-      severity: row.severity as DataQualityIssue["severity"],
-      title: String(row.title),
-      detail: String(row.detail),
-      affectedRows: Number(row.affected_rows)
-    }));
+    const trials = trialRows.map(trialFromRow);
+    const observations = observationRows.map(observationFromRow);
+    const importIssues = issueRows.map(issueFromRow);
 
     const speciesInsights: SpeciesInsight[] = insightRows.flatMap((row) => {
       try {
@@ -345,17 +464,7 @@ export class SeedBankDatabase {
       trials,
       observations,
       batchRow
-        ? {
-            id: batchRow.id,
-            filename: batchRow.filename,
-            importedAt: batchRow.imported_at,
-            workbookHash: batchRow.workbook_hash,
-            rowCount: batchRow.row_count,
-            accessionCount: batchRow.accession_count,
-            speciesCount: batchRow.species_count,
-            treatmentCount: batchRow.treatment_count,
-            warnings: JSON.parse(batchRow.warnings_json)
-        }
+        ? batchSummaryFromRow(batchRow)
         : null,
       importIssues,
       speciesInsights

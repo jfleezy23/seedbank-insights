@@ -191,7 +191,7 @@ try {
   await window.getByRole("heading", { name: "Insight Board" }).waitFor({ timeout: 15_000 });
   await window.getByRole("img", { name: "Portland State University" }).waitFor({ timeout: 15_000 });
   await window.getByText("Evidence guardrails").waitFor({ timeout: 15_000 });
-  await window.getByText("Treatment success").waitFor({ timeout: 15_000 });
+  await window.getByRole("heading", { name: "Treatment success" }).waitFor({ timeout: 15_000 });
   await window.screenshot({ path: mainScreenshot });
   console.log("Packaged app launch smoke passed");
   console.log(`${iconResourceLabel}: ${iconResource}`);
