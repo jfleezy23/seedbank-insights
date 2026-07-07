@@ -104,6 +104,9 @@ function speciesResearchCachePath(batch: ImportBatchSummary, species: string): s
 }
 
 function bundledAiResponseCacheDir(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, "assets", "ai-response-cache", SPECIES_RESEARCH_CACHE_VERSION);
+  }
   return appAssetPath("assets", "ai-response-cache", SPECIES_RESEARCH_CACHE_VERSION);
 }
 

@@ -63,6 +63,16 @@
       "assets/**",
       "package.json"
     ],
+    "extraResources": [
+      {
+        "from": "assets/ai-response-cache",
+        "to": "assets/ai-response-cache",
+        "filter": [
+          "**/*",
+          "!**/.gitkeep"
+        ]
+      }
+    ],
     "mac": {
       "icon": "assets/branding/app-icon.icns",
       "target": [
