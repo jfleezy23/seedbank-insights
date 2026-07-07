@@ -199,32 +199,59 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
 }
 
 function dataQualityFromTrials(trials: TrialRecord[]): DataQualityIssue[] {
-  const missingPt = trials.filter((trial) => !trial.propaguleType).length;
-  const missingSource = trials.filter((trial) => !trial.sourceAccession).length;
-  const unmappedTokens = trials.filter((trial) => trial.treatmentComponents.warnings.length).length;
+  const missingPtRows = trials.filter((trial) => !trial.propaguleType);
+  const missingSourceRows = trials.filter((trial) => !trial.sourceAccession);
+  const unmappedTokenRows = trials.filter((trial) => trial.treatmentComponents.warnings.length);
+  const sourceRows = (rows: TrialRecord[]) => [...new Set(rows.map((trial) => trial.sourceRow))].sort((a, b) => a - b);
+  const species = (rows: TrialRecord[]) => [...new Set(rows.map((trial) => trial.species))].sort();
+  const treatments = (rows: TrialRecord[]) => [...new Set(rows.map((trial) => trial.treatment))].sort();
   const issues: DataQualityIssue[] = [];
-  if (missingSource) {
+  if (missingSourceRows.length) {
     issues.push({
+      id: "missing-source-accession",
       severity: "medium",
+      category: "fix_first",
       title: "Missing source accession",
       detail: "Rows without Source_Accession are retained, but provenance should be reviewed before broad conclusions.",
-      affectedRows: missingSource
+      impact: "Provenance gaps make accession-level pairing and repeatability checks weaker.",
+      action: "Backfill source accession or mark the row as provenance-limited in review notes.",
+      affectedRows: missingSourceRows.length,
+      sourceRows: sourceRows(missingSourceRows),
+      species: species(missingSourceRows),
+      treatments: treatments(missingSourceRows),
+      metric: "Source_Accession"
     });
   }
-  if (missingPt) {
+  if (missingPtRows.length) {
     issues.push({
+      id: "missing-propagule-type",
       severity: "low",
+      category: "fix_first",
       title: "Missing propagule type",
       detail: "A missing PT value limits future support for cutting/division workflows.",
-      affectedRows: missingPt
+      impact: "Propagation type gaps make mixed seed, cutting, and division workflows harder to separate later.",
+      action: "Fill PT where available, especially before comparing unlike propagation methods.",
+      affectedRows: missingPtRows.length,
+      sourceRows: sourceRows(missingPtRows),
+      species: species(missingPtRows),
+      treatments: treatments(missingPtRows),
+      metric: "PT"
     });
   }
-  if (unmappedTokens) {
+  if (unmappedTokenRows.length) {
     issues.push({
+      id: "unmapped-treatment-tokens",
       severity: "medium",
+      category: "codebook",
       title: "Unmapped treatment tokens",
       detail: "Some treatment strings contain tokens outside the current parser vocabulary.",
-      affectedRows: unmappedTokens
+      impact: "Unknown treatment codes can split equivalent protocols or hide meaningful treatment components.",
+      action: "Review the treatment codebook and add aliases only when the lab meaning is confirmed.",
+      affectedRows: unmappedTokenRows.length,
+      sourceRows: sourceRows(unmappedTokenRows),
+      species: species(unmappedTokenRows),
+      treatments: treatments(unmappedTokenRows),
+      metric: "Trt"
     });
   }
   return issues;

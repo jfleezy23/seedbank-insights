@@ -7,9 +7,16 @@ import {
   OPENAI_INSIGHT_MODEL,
   suggestHeaderAliases
 } from "./openai-insights";
-import { researchSpeciesWithExternalSources } from "./species-research";
+import { researchSpeciesWithExternalSources, summarizeSpeciesResearchCacheStatus } from "./species-research";
 import { importWorkbook, inspectWorkbookHeaders } from "../../src/core/workbook";
-import type { AiInsightStatus, DashboardData, ImportBatchSummary, ImportResult, SpeciesResearchResult } from "../../src/core/types";
+import type {
+  AiInsightStatus,
+  DashboardData,
+  ImportBatchSummary,
+  ImportResult,
+  SpeciesResearchCacheStatus,
+  SpeciesResearchResult
+} from "../../src/core/types";
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
@@ -118,7 +125,10 @@ async function readSpeciesResearchCache(
         version?: string;
         result?: SpeciesResearchResult;
       };
-      if (parsed.version !== SPECIES_RESEARCH_CACHE_VERSION || parsed.result?.species !== species) continue;
+      if (!parsed.result) continue;
+      const requestedSpecies = species.trim().replace(/\s+/g, " ").toLowerCase();
+      const cachedSpecies = parsed.result.species.trim().replace(/\s+/g, " ").toLowerCase();
+      if (parsed.version !== SPECIES_RESEARCH_CACHE_VERSION || cachedSpecies !== requestedSpecies) continue;
       return parsed.result;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
@@ -127,6 +137,29 @@ async function readSpeciesResearchCache(
     }
   }
   return null;
+}
+
+async function getSpeciesResearchCacheStatus(batchId?: number): Promise<SpeciesResearchCacheStatus> {
+  const dashboard = getDatabase().getDashboard(batchId);
+  const batch = dashboard.batch;
+  if (!batch?.id) {
+    return {
+      batchId: null,
+      cacheVersion: SPECIES_RESEARCH_CACHE_VERSION,
+      totalSpecies: 0,
+      researchedSpecies: 0,
+      missingSpecies: [],
+      generatedAtLatest: null
+    };
+  }
+
+  const importResult = getDatabase().getImportResult(batch.id);
+  return summarizeSpeciesResearchCacheStatus({
+    batch,
+    species: (importResult?.trials ?? []).map((trial) => trial.species),
+    cacheVersion: SPECIES_RESEARCH_CACHE_VERSION,
+    readCache: readSpeciesResearchCache
+  });
 }
 
 async function writeSpeciesResearchCache(
@@ -498,6 +531,10 @@ function assertWorkbookPath(filePath: string): void {
 }
 
 ipcMain.handle("dashboard:get", () => withOpenAiStatus(getDatabase().getDashboard()));
+
+ipcMain.handle("openai:speciesResearchCacheStatus", async (_event, batchId?: number) =>
+  getSpeciesResearchCacheStatus(optionalBatchId(batchId))
+);
 
 ipcMain.handle("workbook:select", async () => {
   const result = await dialog.showOpenDialog({

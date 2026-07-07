@@ -9,6 +9,11 @@ import { ConfidenceBadge } from "./ConfidenceBadge";
 
 const columns: Array<ColumnDef<TrialQueueItem>> = [
   {
+    header: "Priority",
+    accessorKey: "priority",
+    cell: (info) => <span className={`queue-priority ${info.row.original.priority}`}>{String(info.getValue())}</span>
+  },
+  {
     header: "Species",
     accessorKey: "species",
     cell: (info) => <strong>{String(info.getValue())}</strong>
@@ -19,7 +24,22 @@ const columns: Array<ColumnDef<TrialQueueItem>> = [
   },
   {
     header: "Next step",
-    accessorKey: "nextStep"
+    accessorKey: "nextStep",
+    cell: (info) => (
+      <div className="queue-next-step">
+        <strong>{info.row.original.nextStep}</strong>
+        <span>{info.row.original.reason}</span>
+      </div>
+    )
+  },
+  {
+    header: "Rows",
+    accessorKey: "sourceRows",
+    cell: (info) => info.row.original.sourceRows.join(", ")
+  },
+  {
+    header: "Blocked",
+    accessorKey: "blockedMetric"
   },
   {
     header: "Due",
@@ -44,7 +64,7 @@ export function TrialQueueTable({ rows }: { rows: TrialQueueItem[] }) {
       <div className="panel-heading">
         <div>
           <h2>Trial queue</h2>
-          <p>ND rows and follow-ups that can change interpretation.</p>
+          <p>Row-specific follow-up work that can change treatment interpretation.</p>
         </div>
       </div>
       <table>

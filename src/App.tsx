@@ -3,6 +3,7 @@ import {
   AlertCircle,
   BarChart3,
   BrainCircuit,
+  CircleHelp,
   Database,
   ExternalLink,
   FileSpreadsheet,
@@ -39,7 +40,8 @@ const navItems = [
   { label: "Treatment Comparator", icon: FlaskConical },
   { label: "Trial Queue", icon: Database },
   { label: "Data Quality", icon: AlertCircle },
-  { label: "Ask", icon: MessageSquareText }
+  { label: "Ask", icon: MessageSquareText },
+  { label: "Help", icon: CircleHelp }
 ] as const;
 
 type NavLabel = (typeof navItems)[number]["label"];
@@ -67,7 +69,8 @@ const emptyDashboard: DashboardData = {
     message: "Import a workbook to begin.",
     model: null,
     generatedAt: null
-  }
+  },
+  speciesResearchCacheStatus: null
 };
 
 function AiStatusPill({ dashboard }: { dashboard: DashboardData }) {
@@ -191,6 +194,11 @@ function SpeciesExplorer({
     dashboard.speciesSummaries.find((summary) => summary.species === selectedSpecies) ?? speciesOptions[0]?.summary;
   const activeSpecies = selectedSummary?.species ?? selectedSpecies;
   const selectedLinks = activeSpecies ? buildSpeciesResourceLinks(activeSpecies) : [];
+  const cacheMissingSpecies = useMemo(
+    () => new Set(dashboard.speciesResearchCacheStatus?.missingSpecies ?? []),
+    [dashboard.speciesResearchCacheStatus?.missingSpecies]
+  );
+  const hasCacheStatus = Boolean(dashboard.speciesResearchCacheStatus?.totalSpecies);
   const activeResearchKey = researchKey(dashboard.batch?.id, activeSpecies);
   const selectedResearch = researchResults[activeResearchKey];
   const selectedResearchError = researchErrors[activeResearchKey];
@@ -242,7 +250,10 @@ function SpeciesExplorer({
                   <span>{option.species}</span>
                   <small>
                     {option.summary?.rows ?? 0} rows
-                    {researchResults[researchKey(dashboard.batch?.id, option.species)] ? " · researched" : ""}
+                    {researchResults[researchKey(dashboard.batch?.id, option.species)] ||
+                    (hasCacheStatus && !cacheMissingSpecies.has(option.species))
+                      ? " · researched"
+                      : ""}
                   </small>
                 </button>
               ))}
@@ -490,6 +501,79 @@ function SpeciesExplorer({
   );
 }
 
+function HelpPanel() {
+  return (
+    <section className="view-stack">
+      <section className="panel help-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Help and project information</h2>
+            <p>Practical support details for the SeedBank Insights evaluation prototype.</p>
+          </div>
+        </div>
+        <div className="help-grid">
+          <article>
+            <h3>Project home</h3>
+            <p>
+              Source code and issue tracking live at{" "}
+              <a href="https://github.com/jfleezy23/seedbank-insights" target="_blank" rel="noreferrer">
+                github.com/jfleezy23/seedbank-insights
+                <ExternalLink size={13} />
+              </a>
+              .
+            </p>
+          </article>
+          <article>
+            <h3>Contact and support</h3>
+            <p>
+              For demo feedback, support, or donation coordination, contact{" "}
+              <a href="mailto:jflow23@icloud.com">jflow23@icloud.com</a>.
+            </p>
+          </article>
+          <article>
+            <h3>Privacy</h3>
+            <p>
+              Workbooks, SQLite data, and AI response cache files stay local. OpenAI keys are stored through Electron
+              main using OS safe storage and are not exposed to renderer code.
+            </p>
+          </article>
+          <article>
+            <h3>License</h3>
+            <p>
+              This prototype is provided free of charge to PSU Seed Bank for testing and evaluation, without warranty.
+              See <a href="https://github.com/jfleezy23/seedbank-insights/blob/main/LICENSE.md" target="_blank" rel="noreferrer">LICENSE.md</a>{" "}
+              and{" "}
+              <a
+                href="https://github.com/jfleezy23/seedbank-insights/blob/main/docs/THIRD_PARTY_NOTICES.md"
+                target="_blank"
+                rel="noreferrer"
+              >
+                third-party notices
+              </a>
+              .
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section className="panel help-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>How to use the prototype</h2>
+            <p>Keep each tab focused on its job while reviewing a workbook.</p>
+          </div>
+        </div>
+        <div className="help-steps">
+          <span>1. Import a PSU-style workbook or load the local workbook.</span>
+          <span>2. Use Insight Board for status and where-to-go-next routing.</span>
+          <span>3. Use Species Explorer for AI-backed germination research on a selected taxon.</span>
+          <span>4. Use Data Quality and Trial Queue to fix workbook rows before making protocol decisions.</span>
+        </div>
+      </section>
+    </section>
+  );
+}
+
 function SettingsModal({
   open,
   apiKeyInput,
@@ -563,6 +647,22 @@ function App() {
   const [message, setMessage] = useState("Import the PSU workbook to begin.");
   const activeBatchIdRef = useRef<number | null>(emptyDashboard.batch?.id ?? null);
 
+  async function refreshSpeciesResearchCacheStatus(batchId: number | undefined) {
+    if (!window.seedbank || !batchId) return;
+    try {
+      const status = await window.seedbank.getSpeciesResearchCacheStatus(batchId);
+      setDashboard((current) => {
+        if (current.batch?.id !== status.batchId) return current;
+        return { ...current, speciesResearchCacheStatus: status };
+      });
+    } catch {
+      setDashboard((current) => {
+        if (current.batch?.id !== batchId) return current;
+        return { ...current, speciesResearchCacheStatus: null };
+      });
+    }
+  }
+
   function applyDashboard(next: DashboardData) {
     const nextBatchId = next.batch?.id ?? null;
     if (activeBatchIdRef.current !== nextBatchId) {
@@ -572,6 +672,7 @@ function App() {
     }
     activeBatchIdRef.current = nextBatchId;
     setDashboard(next);
+    if (next.batch?.id) void refreshSpeciesResearchCacheStatus(next.batch.id);
   }
 
   useEffect(() => {
@@ -604,6 +705,27 @@ function App() {
   const donePercent = Math.round(dashboard.metrics.doneRate * 100);
   const batchLabel = dashboard.batch?.filename ?? "No workbook imported";
   const busy = loading || savingKey;
+  const researchCacheStatus = dashboard.speciesResearchCacheStatus;
+  const activeSessionResearchCount = Object.keys(speciesResearchResults).filter((key) =>
+    dashboard.batch?.id ? key.startsWith(`${dashboard.batch.id}:`) : false
+  ).length;
+  const researchedSpeciesCount = researchCacheStatus?.researchedSpecies ?? activeSessionResearchCount;
+  const researchSpeciesTotal = researchCacheStatus?.totalSpecies ?? dashboard.metrics.species;
+  const researchCoverageTitle = dashboard.batch
+    ? `${researchedSpeciesCount} / ${researchSpeciesTotal} researched species`
+    : "Research workbench ready";
+  const researchCoverageDetail =
+    researchCacheStatus && researchCacheStatus.totalSpecies > 0
+      ? researchCacheStatus.missingSpecies.length
+        ? `${researchCacheStatus.missingSpecies.slice(0, 3).join(", ")}${
+            researchCacheStatus.missingSpecies.length > 3 ? ` +${researchCacheStatus.missingSpecies.length - 3}` : ""
+          } still need cached research.`
+        : "All imported species have cached AI research for the demo."
+      : "Run species-level AI research with local row evidence, family context, caveats, and next-trial design.";
+  const qualitySeverityCounts = dashboard.dataQualityIssues.reduce(
+    (counts, issue) => ({ ...counts, [issue.severity]: counts[issue.severity] + 1 }),
+    { high: 0, medium: 0, low: 0 }
+  );
 
   const metricCards = useMemo(
     () => [
@@ -726,6 +848,7 @@ function App() {
           return;
         }
         setSpeciesResearchResults((current) => ({ ...current, [key]: result }));
+        void refreshSpeciesResearchCacheStatus(requestedBatchId);
         setMessage(
           result.status === "no_sources"
             ? `No valid AI technique survived for ${species}; local evidence remains available as an audit trail.`
@@ -820,14 +943,8 @@ function App() {
 
       <article className="overview-card">
         <span>Species assessment</span>
-        <strong>
-          {Object.keys(speciesResearchResults).length
-            ? `${Object.keys(speciesResearchResults).length} researched species`
-            : "Research workbench ready"}
-        </strong>
-        <p>
-          Run species-level AI research with local row evidence, family context, caveats, and next-trial design.
-        </p>
+        <strong>{researchCoverageTitle}</strong>
+        <p>{researchCoverageDetail}</p>
         <button type="button" onClick={() => setSelectedNav("Species Explorer")}>
           Open Species Explorer
         </button>
@@ -973,11 +1090,14 @@ function App() {
             <section className="panel">
               <div className="panel-heading">
                 <div>
-                  <h2>Guardrail status</h2>
-                  <p>These checks slow down false positives and false negatives.</p>
+                  <h2>Review priorities</h2>
+                  <p>Use this as a triage summary before editing the workbook.</p>
                 </div>
               </div>
               <div className="quality-summary-list">
+                <span>High priority: {qualitySeverityCounts.high}</span>
+                <span>Medium priority: {qualitySeverityCounts.medium}</span>
+                <span>Low priority: {qualitySeverityCounts.low}</span>
                 <span>Trial rows: {dashboard.metrics.trials}</span>
                 <span>Species: {dashboard.metrics.species}</span>
                 <span>Parsed observations: {dashboard.metrics.observationsExtracted}</span>
@@ -992,6 +1112,8 @@ function App() {
             <AskPanel dashboard={dashboard} aiConfigured={aiConfigured} />
           </section>
         )}
+
+        {selectedNav === "Help" && <HelpPanel />}
       </main>
 
       <SettingsModal

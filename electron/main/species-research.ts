@@ -1,4 +1,11 @@
-import type { DashboardData, ImportResult, SpeciesResearchResult, SpeciesTaxonomyMatch } from "../../src/core/types";
+import type {
+  DashboardData,
+  ImportBatchSummary,
+  ImportResult,
+  SpeciesResearchCacheStatus,
+  SpeciesResearchResult,
+  SpeciesTaxonomyMatch
+} from "../../src/core/types";
 import { generateSpeciesResearch } from "./openai-insights";
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
@@ -20,6 +27,10 @@ interface GbifMatchResponse {
 
 function normalizeSpaces(value: string): string {
   return value.trim().replace(/\s+/g, " ");
+}
+
+function speciesIdentity(value: string | null | undefined): string {
+  return normalizeSpaces(value ?? "").toLowerCase();
 }
 
 async function fetchWithTimeout(fetcher: Fetcher, input: string, init: RequestInit = {}): Promise<Response> {
@@ -76,6 +87,47 @@ function isAcceptedGenusMatch(genus: string, match: GbifMatchResponse): boolean 
 function localSpeciesName(importResult: ImportResult, species: string): string | null {
   const normalized = normalizeSpaces(species).toLowerCase();
   return importResult.trials.find((trial) => trial.species.toLowerCase() === normalized)?.species ?? null;
+}
+
+export async function summarizeSpeciesResearchCacheStatus({
+  batch,
+  species,
+  cacheVersion,
+  readCache
+}: {
+  batch: ImportBatchSummary;
+  species: string[];
+  cacheVersion: string;
+  readCache: (batch: ImportBatchSummary, species: string) => Promise<SpeciesResearchResult | null>;
+}): Promise<SpeciesResearchCacheStatus> {
+  const speciesByIdentity = new Map<string, string>();
+  for (const rawSpecies of species) {
+    const normalized = normalizeSpaces(rawSpecies);
+    if (!normalized) continue;
+    const identity = speciesIdentity(normalized);
+    if (!speciesByIdentity.has(identity)) speciesByIdentity.set(identity, normalized);
+  }
+  const speciesList = [...speciesByIdentity.values()].sort((a, b) => a.localeCompare(b));
+  const missingSpecies: string[] = [];
+  const generatedAtValues: string[] = [];
+
+  for (const speciesName of speciesList) {
+    const cached = await readCache(batch, speciesName);
+    if (cached?.status === "ready" && speciesIdentity(cached.species) === speciesIdentity(speciesName)) {
+      if (cached.generatedAt) generatedAtValues.push(cached.generatedAt);
+    } else {
+      missingSpecies.push(speciesName);
+    }
+  }
+
+  return {
+    batchId: batch.id ?? null,
+    cacheVersion,
+    totalSpecies: speciesList.length,
+    researchedSpecies: speciesList.length - missingSpecies.length,
+    missingSpecies,
+    generatedAtLatest: generatedAtValues.sort()[generatedAtValues.length - 1] ?? null
+  };
 }
 
 export async function fetchGbifTaxonomyMatch(

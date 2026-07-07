@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   fetchGbifTaxonomyMatch,
-  researchSpeciesWithExternalSources
+  researchSpeciesWithExternalSources,
+  summarizeSpeciesResearchCacheStatus
 } from "../../electron/main/species-research";
 import {
   buildSpeciesInsightContexts,
@@ -67,6 +68,140 @@ function importResult(trials: TrialRecord[]): ImportResult {
 }
 
 describe("species research taxonomy and synthesis", () => {
+  it("counts ready cache entries for the active batch species list", async () => {
+    const batch = {
+      id: 7,
+      filename: "fixture.xlsx",
+      importedAt: "2026-01-01T00:00:00.000Z",
+      workbookHash: "hash",
+      rowCount: 3,
+      accessionCount: 3,
+      speciesCount: 3,
+      treatmentCount: 1,
+      warnings: []
+    };
+    const status = await summarizeSpeciesResearchCacheStatus({
+      batch,
+      cacheVersion: "species-research-v4",
+      species: ["Phacelia heterophylla", "Ceanothus velutinus", "Phacelia heterophylla"],
+      readCache: async (_batch, speciesName) =>
+        speciesName === "Phacelia heterophylla"
+          ? {
+              species: speciesName,
+              status: "ready",
+              plantFamily: "Hydrophyllaceae",
+              familySource: "ai_inferred",
+              deterministicConfidence: "Promising",
+              summary: "Ready.",
+              likelyStrategy: "Repeat CS.",
+              familyPattern: "Context only.",
+              recommendedTechniques: [],
+              protocolGaps: [],
+              nextTrialDesign: "Repeat paired trays.",
+              caveats: [],
+              evidenceNotes: [],
+              localEvidence: [],
+              sources: [],
+              generatedAt: "2026-01-02T00:00:00.000Z",
+              model: "gpt-5.5"
+            }
+          : null
+    });
+
+    expect(status).toMatchObject({
+      batchId: 7,
+      cacheVersion: "species-research-v4",
+      totalSpecies: 2,
+      researchedSpecies: 1,
+      missingSpecies: ["Ceanothus velutinus"],
+      generatedAtLatest: "2026-01-02T00:00:00.000Z"
+    });
+  });
+
+  it("does not count stale species names or no-source cache entries as researched", async () => {
+    const batch = {
+      id: 8,
+      filename: "fixture.xlsx",
+      importedAt: "2026-01-01T00:00:00.000Z",
+      workbookHash: "hash",
+      rowCount: 2,
+      accessionCount: 2,
+      speciesCount: 2,
+      treatmentCount: 1,
+      warnings: []
+    };
+    const status = await summarizeSpeciesResearchCacheStatus({
+      batch,
+      cacheVersion: "species-research-v4",
+      species: ["Acmispon americanus", "Grindelia stricta"],
+      readCache: async (_batch, speciesName) => ({
+        species: speciesName === "Acmispon americanus" ? "Different species" : speciesName,
+        status: speciesName === "Grindelia stricta" ? "no_sources" : "ready",
+        plantFamily: null,
+        familySource: "unknown",
+        deterministicConfidence: "Needs replication",
+        summary: "Not usable.",
+        likelyStrategy: "No source.",
+        familyPattern: "Unknown.",
+        recommendedTechniques: [],
+        protocolGaps: [],
+        nextTrialDesign: "Repeat local trials.",
+        caveats: [],
+        evidenceNotes: [],
+        localEvidence: [],
+        sources: [],
+        generatedAt: "2026-01-02T00:00:00.000Z",
+        model: null
+      })
+    });
+
+    expect(status.researchedSpecies).toBe(0);
+    expect(status.missingSpecies).toEqual(["Acmispon americanus", "Grindelia stricta"]);
+    expect(status.generatedAtLatest).toBeNull();
+  });
+
+  it("counts cache hits across casing differences for the same species", async () => {
+    const batch = {
+      id: 9,
+      filename: "fixture.xlsx",
+      importedAt: "2026-01-01T00:00:00.000Z",
+      workbookHash: "hash",
+      rowCount: 2,
+      accessionCount: 2,
+      speciesCount: 1,
+      treatmentCount: 1,
+      warnings: []
+    };
+    const status = await summarizeSpeciesResearchCacheStatus({
+      batch,
+      cacheVersion: "species-research-v4",
+      species: ["Phacelia heterophylla", "PHACELIA HETEROPHYLLA"],
+      readCache: async () => ({
+        species: "Phacelia heterophylla",
+        status: "ready",
+        plantFamily: "Hydrophyllaceae",
+        familySource: "ai_inferred",
+        deterministicConfidence: "Promising",
+        summary: "Ready.",
+        likelyStrategy: "Repeat CS.",
+        familyPattern: "Context only.",
+        recommendedTechniques: [],
+        protocolGaps: [],
+        nextTrialDesign: "Repeat paired trays.",
+        caveats: [],
+        evidenceNotes: [],
+        localEvidence: [],
+        sources: [],
+        generatedAt: "2026-01-02T00:00:00.000Z",
+        model: "gpt-5.5"
+      })
+    });
+
+    expect(status.totalSpecies).toBe(1);
+    expect(status.researchedSpecies).toBe(1);
+    expect(status.missingSpecies).toEqual([]);
+  });
+
   it("parses GBIF taxonomy matches for plant families", async () => {
     const taxonomy = await fetchGbifTaxonomyMatch("Phacelia heterophylla", async () =>
       jsonResponse({

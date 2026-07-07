@@ -12,6 +12,213 @@ test("dashboard renders primary insight surfaces in browser fallback", async ({ 
   await expect(page.locator(".native-chart-bar")).toHaveCount(0);
 });
 
+test("dashboard shows cache-backed research coverage and actionable workbook queues", async ({ page }) => {
+  await page.addInitScript(() => {
+    const dashboard = {
+      batch: {
+        id: 22,
+        filename: "fixture.xlsx",
+        importedAt: "2026-01-01T00:00:00.000Z",
+        workbookHash: "hash",
+        rowCount: 4,
+        accessionCount: 4,
+        speciesCount: 3,
+        treatmentCount: 3,
+        warnings: []
+      },
+      metrics: {
+        trials: 4,
+        accessions: 4,
+        species: 3,
+        treatments: 3,
+        doneRate: 0.25,
+        observationsExtracted: 1
+      },
+      treatmentSummaries: [],
+      speciesSummaries: [
+        {
+          species: "Phacelia heterophylla",
+          rows: 2,
+          accessions: 2,
+          treatments: 2,
+          pcCount: 2,
+          bestTreatment: "CS",
+          bestPcMean: 4,
+          confidence: "Promising"
+        },
+        {
+          species: "Grindelia stricta",
+          rows: 1,
+          accessions: 1,
+          treatments: 1,
+          pcCount: 0,
+          bestTreatment: null,
+          bestPcMean: null,
+          confidence: "Needs replication"
+        },
+        {
+          species: "Ceanothus velutinus",
+          rows: 1,
+          accessions: 1,
+          treatments: 1,
+          pcCount: 1,
+          bestTreatment: "SCAR+CS",
+          bestPcMean: 5,
+          confidence: "Needs replication"
+        }
+      ],
+      pairedComparisons: [
+        {
+          baseline: "C",
+          treatment: "CS",
+          n: 2,
+          improved: 1,
+          tied: 1,
+          worse: 0,
+          meanDiff: 1,
+          medianDiff: 1,
+          ciLow: -1,
+          ciHigh: 2,
+          confidence: "Needs replication",
+          falsePositiveRisk: "Elevated.",
+          falseNegativeRisk: "Elevated. The treatment may work, but this dataset is underpowered.",
+          additionalTrialsNeeded: 3,
+          examples: []
+        }
+      ],
+      trialQueue: [
+        {
+          accession: "P1",
+          species: "Grindelia stricta",
+          treatment: "CS",
+          status: "D",
+          priority: "high",
+          nextDate: "2026-01-01",
+          nextStep: "Record PC score for row 12.",
+          reason: "The trial is marked done, but missing PC blocks treatment comparison.",
+          sourceRows: [12],
+          blockedMetric: "PC",
+          pc: null,
+          confidence: "Needs replication"
+        },
+        {
+          accession: "P2",
+          species: "Ceanothus velutinus",
+          treatment: "SCAR+CS",
+          status: "ND",
+          priority: "medium",
+          nextDate: "2026-01-02",
+          nextStep: "Resolve ND follow-up for promising row 19.",
+          reason: "High germination on an active row can shift recommendations once completion and survival are known.",
+          sourceRows: [19],
+          blockedMetric: "D|ND",
+          pc: 5,
+          confidence: "Promising"
+        }
+      ],
+      dataQualityIssues: [
+        {
+          id: "missing-pc",
+          severity: "medium",
+          category: "fix_first",
+          title: "Missing propagation scores",
+          detail: "Rows without PC cannot support treatment success calls.",
+          impact: "Treatment comparisons undercount active or completed rows.",
+          action: "Enter PC when known, or keep the trial active.",
+          affectedRows: 1,
+          sourceRows: [12],
+          species: ["Grindelia stricta"],
+          treatments: ["CS"],
+          metric: "PC"
+        },
+        {
+          id: "unmapped-treatment-tokens",
+          severity: "medium",
+          category: "codebook",
+          title: "Unmapped treatment tokens",
+          detail: "Some treatment strings contain tokens outside the current parser vocabulary.",
+          impact: "Unknown codes can split equivalent protocols.",
+          action: "Review the treatment codebook.",
+          affectedRows: 1,
+          sourceRows: [19],
+          species: ["Ceanothus velutinus"],
+          treatments: ["SCAR+CS"],
+          metric: "Trt"
+        }
+      ],
+      askSuggestions: [],
+      speciesInsights: [],
+      aiInsightStatus: {
+        configured: false,
+        state: "not_configured",
+        message: "OpenAI is optional.",
+        model: "gpt-5.5",
+        generatedAt: null
+      },
+      speciesResearchCacheStatus: null
+    };
+    const cacheStatus = {
+      batchId: 22,
+      cacheVersion: "species-research-v4",
+      totalSpecies: 3,
+      researchedSpecies: 3,
+      missingSpecies: [],
+      generatedAtLatest: "2026-01-02T00:00:00.000Z"
+    };
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
+      getDashboard: async () => dashboard,
+      getSpeciesResearchCacheStatus: async () => cacheStatus,
+      selectWorkbook: async () => dashboard,
+      importLocalDefaultWorkbook: async () => dashboard,
+      saveOpenAiKey: async () => ({ configured: true, safeStorageAvailable: true, dashboard }),
+      clearOpenAiKey: async () => ({ configured: false, safeStorageAvailable: true, dashboard }),
+      generateSpeciesInsights: async () => dashboard,
+      researchSpecies: async () => ({
+        species: "Phacelia heterophylla",
+        status: "no_sources",
+        plantFamily: null,
+        familySource: "unknown",
+        deterministicConfidence: "Needs replication",
+        summary: "No cached research.",
+        likelyStrategy: "Use local evidence.",
+        familyPattern: "Unknown.",
+        recommendedTechniques: [],
+        protocolGaps: [],
+        nextTrialDesign: "Repeat local trials.",
+        caveats: [],
+        evidenceNotes: [],
+        localEvidence: [],
+        sources: [],
+        generatedAt: "2026-01-01T00:00:00.000Z",
+        model: null
+      }),
+      askQuestion: async () => ({
+        answer: "Use CS cautiously.",
+        caveats: [],
+        citedRows: [],
+        model: "gpt-5.5",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      })
+    };
+  });
+
+  await page.goto("/");
+  await expect(page.getByText("3 / 3 researched species")).toBeVisible();
+  await expect(page.getByText("All imported species have cached AI research for the demo.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Open Data Quality" }).click();
+  await expect(page.getByText("Rows 12")).toBeVisible();
+  await expect(page.getByText("Grindelia stricta")).toBeVisible();
+  await page.getByRole("button", { name: "Codebook" }).click();
+  await expect(page.getByText("Rows 19")).toBeVisible();
+  await expect(page.getByText("Review the treatment codebook.")).toBeVisible();
+
+  await page.getByRole("button", { name: "Trial Queue", exact: true }).click();
+  await expect(page.getByText("Record PC score for row 12.")).toBeVisible();
+  await expect(page.getByText("Resolve ND follow-up for promising row 19.")).toBeVisible();
+});
+
 test("overview cards navigate to dedicated workspaces", async ({ page }) => {
   await page.goto("/");
 
@@ -25,7 +232,7 @@ test("overview cards navigate to dedicated workspaces", async ({ page }) => {
 
   await page.getByRole("button", { name: "Insight Board", exact: true }).click();
   await page.getByRole("button", { name: "Open Data Quality" }).click();
-  await expect(page.getByRole("heading", { name: "Data quality warnings" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data quality action queue" })).toBeVisible();
 
   await page.getByRole("button", { name: "Insight Board", exact: true }).click();
   await page.getByRole("button", { name: "Open Trial Queue" }).click();
@@ -47,16 +254,21 @@ test("sidebar navigation renders distinct workspaces and settings state", async 
 
   await page.getByRole("button", { name: "Trial Queue", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Trial Queue", exact: true })).toBeVisible();
-  await expect(page.getByText("ND rows and follow-ups")).toBeVisible();
+  await expect(page.getByText("Row-specific follow-up work")).toBeVisible();
 
   await page.getByRole("button", { name: "Data Quality", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Data quality warnings" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Guardrail status" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Data quality action queue" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review priorities" })).toBeVisible();
 
   await page.getByRole("button", { name: "Ask", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Ask", exact: true })).toBeVisible();
   await expect(page.getByLabel("Question")).not.toHaveAttribute("readonly");
   await expect(page.getByRole("button", { name: "Ask OpenAI" })).toBeDisabled();
+
+  await page.getByRole("button", { name: "Help", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Help and project information" })).toBeVisible();
+  await expect(page.getByText("github.com/jfleezy23/seedbank-insights")).toBeVisible();
+  await expect(page.getByText("jflow23@icloud.com")).toBeVisible();
 
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();

@@ -23,7 +23,8 @@ export function buildDashboardData(
   const doneCount = trials.filter((trial) => trial.status === "D").length;
   const pairedComparisons = buildDefaultComparisons(trials);
   const issueKey = (issue: DataQualityIssue) => `${issue.severity}:${issue.title}:${issue.detail}`;
-  const issues = [...importIssues, ...qualityIssues(trials)].filter((issue, index, all) => {
+  const computedIssues = qualityIssues(trials);
+  const issues = [...computedIssues, ...importIssues].filter((issue, index, all) => {
     const key = issueKey(issue);
     return all.findIndex((candidate) => issueKey(candidate) === key) === index;
   });
@@ -59,7 +60,8 @@ export function buildDashboardData(
         : "OpenAI is not configured. Deterministic insights are available.",
       model: speciesInsights[0]?.model ?? null,
       generatedAt: speciesInsights[0]?.generatedAt ?? null
-    }
+    },
+    speciesResearchCacheStatus: null
   };
 }
 

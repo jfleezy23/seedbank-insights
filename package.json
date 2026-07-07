@@ -5,7 +5,7 @@
   "description": "Desktop insight UI for PSU-style seed bank propagation spreadsheets.",
   "main": "dist-electron/electron/main/main.js",
   "author": "AG Insights",
-  "license": "UNLICENSED",
+  "license": "SEE LICENSE IN LICENSE.md",
   "scripts": {
     "dev": "pnpm run build:electron && concurrently -k -n vite,electron -c green,cyan \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && electron dist-electron/electron/main/main.js\"",
     "build": "pnpm run typecheck && pnpm run build:renderer && pnpm run build:electron",

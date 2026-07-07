@@ -57,6 +57,7 @@ docs/                Product, architecture, release, security, and design notes
 ## Documentation
 
 - [Product overview](docs/product-overview.md)
+- [Help](docs/help.md)
 - [User guide](docs/user-guide.md)
 - [Architecture](docs/architecture.md)
 - [Data and AI guardrails](docs/data-and-ai-guardrails.md)
@@ -66,6 +67,8 @@ docs/                Product, architecture, release, security, and design notes
 - [Roadmap](docs/roadmap.md)
 - [Brand notes](docs/brand-notes.md)
 - [Security policy](SECURITY.md)
+- [License](LICENSE.md)
+- [Third-party notices](docs/THIRD_PARTY_NOTICES.md)
 - [Contributing](CONTRIBUTING.md)
 
 ## Data And Privacy

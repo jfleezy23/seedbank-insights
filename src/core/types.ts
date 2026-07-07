@@ -67,10 +67,18 @@ export interface ParsedObservation {
 }
 
 export interface DataQualityIssue {
+  id?: string;
   severity: "high" | "medium" | "low";
+  category?: "fix_first" | "replication" | "codebook" | "notes" | "follow_up";
   title: string;
   detail: string;
+  impact?: string;
+  action?: string;
   affectedRows: number;
+  sourceRows?: number[];
+  species?: string[];
+  treatments?: string[];
+  metric?: string;
 }
 
 export interface SpeciesInsightEvidence {
@@ -271,10 +279,23 @@ export interface TrialQueueItem {
   species: string;
   treatment: string;
   status: "D" | "ND" | null;
+  priority: "high" | "medium" | "low";
   nextDate: string | null;
   nextStep: string;
+  reason: string;
+  sourceRows: number[];
+  blockedMetric: "PC" | "D|ND" | "LPC" | "4PC" | "Notes" | "Replication";
   pc: number | null;
   confidence: ConfidenceLabel;
+}
+
+export interface SpeciesResearchCacheStatus {
+  batchId: number | null;
+  cacheVersion: string;
+  totalSpecies: number;
+  researchedSpecies: number;
+  missingSpecies: string[];
+  generatedAtLatest: string | null;
 }
 
 export interface DashboardData {
@@ -295,4 +316,5 @@ export interface DashboardData {
   askSuggestions: string[];
   speciesInsights: SpeciesInsight[];
   aiInsightStatus: AiInsightStatus;
+  speciesResearchCacheStatus?: SpeciesResearchCacheStatus | null;
 }

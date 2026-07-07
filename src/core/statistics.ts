@@ -156,6 +156,22 @@ function confidenceRank(label: ConfidenceLabel): number {
   }
 }
 
+function uniqueSorted(values: string[]): string[] {
+  return [...new Set(values.filter(Boolean))].sort((a, b) => a.localeCompare(b));
+}
+
+function rowList(rows: TrialRecord[]): number[] {
+  return [...new Set(rows.map((row) => row.sourceRow))].sort((a, b) => a - b);
+}
+
+function speciesList(rows: TrialRecord[]): string[] {
+  return uniqueSorted(rows.map((row) => row.species));
+}
+
+function treatmentList(rows: TrialRecord[]): string[] {
+  return uniqueSorted(rows.map((row) => row.treatment));
+}
+
 export function pairedComparison(
   trials: TrialRecord[],
   baseline: string,
@@ -239,64 +255,218 @@ export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison
 
 export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {
   return trials
-    .filter((trial) => trial.status !== "D")
     .map((trial) => {
-      const next =
-        trial.ttd ?? trial.linerTtd ?? trial.fourTtd ?? trial.csed ?? trial.wsed ?? trial.startDate;
+      const next = trial.ttd ?? trial.linerTtd ?? trial.fourTtd ?? trial.csed ?? trial.wsed ?? trial.startDate;
       const confidence: ConfidenceLabel =
         trial.pc !== null && trial.pc >= 4 ? "Promising" : trial.pc === null ? "Needs replication" : "Inconclusive";
+
+      let priority: TrialQueueItem["priority"] = "low";
+      let blockedMetric: TrialQueueItem["blockedMetric"] = "Replication";
+      let nextStep = "Add a paired replicate before treating this row as evidence.";
+      let reason = "Current evidence is too thin to separate treatment effect from accession noise.";
+
+      if (trial.status === null) {
+        priority = "high";
+        blockedMetric = "D|ND";
+        nextStep = `Set D/ND status for row ${trial.sourceRow}.`;
+        reason = "Completion status is needed before this row can be interpreted as active, failed, or settled.";
+      } else if (trial.pc === null) {
+        priority = trial.status === "D" ? "high" : "medium";
+        blockedMetric = "PC";
+        nextStep = `Record PC score for row ${trial.sourceRow}.`;
+        reason =
+          trial.status === "D"
+            ? "The trial is marked done, but missing PC blocks treatment comparison."
+            : "The row cannot contribute to germination evidence until PC is recorded or the trial remains active.";
+      } else if (trial.status === "ND" && trial.pc >= 4) {
+        priority = "medium";
+        blockedMetric = "D|ND";
+        nextStep = `Resolve ND follow-up for promising row ${trial.sourceRow}.`;
+        reason = "High germination on an active row can shift recommendations once completion and survival are known.";
+      } else if (trial.pc >= 4 && trial.lpc === null) {
+        priority = "medium";
+        blockedMetric = "LPC";
+        nextStep = `Record liner survival for row ${trial.sourceRow}.`;
+        reason = "Good germination is not enough if seedlings fail during liner production.";
+      } else if (trial.lpc !== null && trial.lpc >= 4 && trial.fourPc === null) {
+        priority = "low";
+        blockedMetric = "4PC";
+        nextStep = `Record 4-inch survival for row ${trial.sourceRow}.`;
+        reason = "Production follow-through confirms whether a germination win becomes usable plants.";
+      } else if (trial.notes || trial.pcd) {
+        priority = "low";
+        blockedMetric = "Notes";
+        nextStep = `Review notes for row ${trial.sourceRow}.`;
+        reason = "The notes may contain counts, rescue handling, contamination, or timing details that affect interpretation.";
+      }
+
       return {
         accession: trial.pAccession,
         species: trial.species,
         treatment: trial.treatment,
         status: trial.status,
+        priority,
         nextDate: next,
-        nextStep: trial.pc === null ? "Record propagation class" : "Complete production follow-up",
+        nextStep,
+        reason,
+        sourceRows: [trial.sourceRow],
+        blockedMetric,
         pc: trial.pc,
         confidence
       };
     })
-    .sort((a, b) => String(a.nextDate ?? "9999").localeCompare(String(b.nextDate ?? "9999")))
+    .filter((item) => item.status !== "D" || item.blockedMetric !== "Replication")
+    .sort((a, b) => {
+      const priorityOrder = { high: 0, medium: 1, low: 2 };
+      return (
+        priorityOrder[a.priority] - priorityOrder[b.priority] ||
+        String(a.nextDate ?? "9999").localeCompare(String(b.nextDate ?? "9999")) ||
+        a.species.localeCompare(b.species)
+      );
+    })
     .slice(0, 18);
 }
 
 export function qualityIssues(trials: TrialRecord[]): DataQualityIssue[] {
-  const missingPc = trials.filter((trial) => trial.pc === null).length;
-  const missingStatus = trials.filter((trial) => trial.status === null).length;
-  const rareTreatments = summarizeTreatments(trials).filter((summary) => summary.rows < 3).length;
-  const noteRows = trials.filter((trial) => trial.notes || trial.pcd).length;
+  const missingPcRows = trials.filter((trial) => trial.pc === null);
+  const missingStatusRows = trials.filter((trial) => trial.status === null);
+  const missingSourceRows = trials.filter((trial) => !trial.sourceAccession);
+  const missingPropaguleRows = trials.filter((trial) => !trial.propaguleType);
+  const rareTreatmentSummaries = summarizeTreatments(trials).filter((summary) => summary.rows < 3);
+  const rareTreatmentRows = trials.filter((trial) =>
+    rareTreatmentSummaries.some((summary) => summary.treatment === trial.treatment)
+  );
+  const unmappedTokenRows = trials.filter((trial) => trial.treatmentComponents.warnings.length);
+  const noteRows = trials.filter((trial) => trial.notes || trial.pcd);
+  const highPcNoLinerRows = trials.filter((trial) => trial.pc !== null && trial.pc >= 4 && trial.lpc === null);
   const issues: DataQualityIssue[] = [];
 
-  if (missingPc) {
+  if (missingPcRows.length) {
     issues.push({
+      id: "missing-pc",
       severity: "medium",
+      category: "fix_first",
       title: "Missing propagation scores",
       detail: "Rows without PC cannot support treatment success calls.",
-      affectedRows: missingPc
+      impact: "Treatment comparisons undercount active or completed rows, which can create false negatives.",
+      action: "Enter PC when known, or leave the trial active and keep it out of success ranking.",
+      affectedRows: missingPcRows.length,
+      sourceRows: rowList(missingPcRows),
+      species: speciesList(missingPcRows),
+      treatments: treatmentList(missingPcRows),
+      metric: "PC"
     });
   }
-  if (missingStatus) {
+  if (missingStatusRows.length) {
     issues.push({
+      id: "missing-status",
       severity: "low",
+      category: "fix_first",
       title: "Missing done status",
       detail: "Completion status is required to distinguish active trials from settled outcomes.",
-      affectedRows: missingStatus
+      impact: "Rows can be mistaken for failures or successes before they are actually done.",
+      action: "Fill D/ND before using these rows as settled evidence.",
+      affectedRows: missingStatusRows.length,
+      sourceRows: rowList(missingStatusRows),
+      species: speciesList(missingStatusRows),
+      treatments: treatmentList(missingStatusRows),
+      metric: "D|ND"
     });
   }
-  if (rareTreatments) {
+  if (missingSourceRows.length) {
     issues.push({
+      id: "missing-source-accession",
+      severity: "medium",
+      category: "fix_first",
+      title: "Missing source accession",
+      detail: "Rows without Source_Accession are retained, but provenance should be reviewed before broad conclusions.",
+      impact: "Provenance gaps make accession-level pairing and repeatability checks weaker.",
+      action: "Backfill source accession or mark the row as provenance-limited in review notes.",
+      affectedRows: missingSourceRows.length,
+      sourceRows: rowList(missingSourceRows),
+      species: speciesList(missingSourceRows),
+      treatments: treatmentList(missingSourceRows),
+      metric: "Source_Accession"
+    });
+  }
+  if (missingPropaguleRows.length) {
+    issues.push({
+      id: "missing-propagule-type",
+      severity: "low",
+      category: "fix_first",
+      title: "Missing propagule type",
+      detail: "A missing PT value limits future support for cutting/division workflows.",
+      impact: "Propagation type gaps make mixed seed, cutting, and division workflows harder to separate later.",
+      action: "Fill PT where available, especially before comparing unlike propagation methods.",
+      affectedRows: missingPropaguleRows.length,
+      sourceRows: rowList(missingPropaguleRows),
+      species: speciesList(missingPropaguleRows),
+      treatments: treatmentList(missingPropaguleRows),
+      metric: "PT"
+    });
+  }
+  if (rareTreatmentSummaries.length) {
+    issues.push({
+      id: "rare-treatment-replication",
       severity: "high",
+      category: "replication",
       title: "Rare treatment false-positive risk",
       detail: "Several treatment strings appear fewer than three times. These must be labeled as replication needs.",
-      affectedRows: rareTreatments
+      impact: "A one-off high PC can look like a working protocol when it may be accession-specific noise.",
+      action: "Repeat rare treatment codes against matched controls before promoting them.",
+      affectedRows: rareTreatmentRows.length,
+      sourceRows: rowList(rareTreatmentRows),
+      species: speciesList(rareTreatmentRows),
+      treatments: rareTreatmentSummaries.map((summary) => summary.treatment),
+      metric: "Replication"
     });
   }
-  if (noteRows) {
+  if (unmappedTokenRows.length) {
     issues.push({
+      id: "unmapped-treatment-tokens",
+      severity: "medium",
+      category: "codebook",
+      title: "Unmapped treatment tokens",
+      detail: "Some treatment strings contain tokens outside the current parser vocabulary.",
+      impact: "Unknown treatment codes can split equivalent protocols or hide meaningful treatment components.",
+      action: "Review the treatment codebook and add aliases only when the lab meaning is confirmed.",
+      affectedRows: unmappedTokenRows.length,
+      sourceRows: rowList(unmappedTokenRows),
+      species: speciesList(unmappedTokenRows),
+      treatments: treatmentList(unmappedTokenRows),
+      metric: "Trt"
+    });
+  }
+  if (highPcNoLinerRows.length) {
+    issues.push({
+      id: "germination-without-liner-followup",
+      severity: "medium",
+      category: "follow_up",
+      title: "High germination without liner follow-up",
+      detail: "Rows with PC 4-5 still need production survival checks before being treated as a complete success.",
+      impact: "A germination method can look successful even if seedlings fail after transfer.",
+      action: "Record LPC and later 4PC for high-PC rows before turning them into protocol recommendations.",
+      affectedRows: highPcNoLinerRows.length,
+      sourceRows: rowList(highPcNoLinerRows),
+      species: speciesList(highPcNoLinerRows),
+      treatments: treatmentList(highPcNoLinerRows),
+      metric: "LPC"
+    });
+  }
+  if (noteRows.length) {
+    issues.push({
+      id: "notes-contain-evidence",
       severity: "low",
+      category: "notes",
       title: "Notes contain usable evidence",
       detail: "Counts extracted from notes should retain raw snippets for audit.",
-      affectedRows: noteRows
+      impact: "Unreviewed notes can contain germination counts, contamination, rescue handling, or production context.",
+      action: "Review raw snippets before treating extracted observations as clean outcome data.",
+      affectedRows: noteRows.length,
+      sourceRows: rowList(noteRows),
+      species: speciesList(noteRows),
+      treatments: treatmentList(noteRows),
+      metric: "Notes"
     });
   }
 

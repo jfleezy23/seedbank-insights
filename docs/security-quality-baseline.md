@@ -52,6 +52,6 @@ Required checks should include the main CI workflow once it is green on GitHub.
 
 ## Known Public-Repo Gaps
 
-- No license grant is included yet.
+- License coverage is an evaluation grant for PSU Seed Bank testing, plus third-party dependency notices.
 - Releases are not signed/notarized unless a future release note explicitly documents that process.
 - Branch protection should be enabled after the current in-flight code settles and the first public CI run is green.
