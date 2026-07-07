@@ -7,8 +7,7 @@ coverage/
 playwright-report/
 test-results/
 .vite/
-assets/ai-response-cache/*
-!assets/ai-response-cache/.gitkeep
+assets/ai-response-cache/
 .env
 .env.*
 !.env.example

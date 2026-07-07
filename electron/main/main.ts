@@ -103,19 +103,9 @@ function speciesResearchCachePath(batch: ImportBatchSummary, species: string): s
   return path.join(aiResponseCacheDir(), `${speciesResearchCacheKey(batch, species)}.json`);
 }
 
-function bundledAiResponseCacheDir(): string {
-  if (app.isPackaged) {
-    return path.join(process.resourcesPath, "assets", "ai-response-cache", SPECIES_RESEARCH_CACHE_VERSION);
-  }
-  return appAssetPath("assets", "ai-response-cache", SPECIES_RESEARCH_CACHE_VERSION);
-}
-
 function speciesResearchCacheCandidatePaths(batch: ImportBatchSummary, species: string): string[] {
   const filename = `${speciesResearchCacheKey(batch, species)}.json`;
-  return uniquePaths([
-    speciesResearchCachePath(batch, species),
-    path.join(bundledAiResponseCacheDir(), filename)
-  ]);
+  return uniquePaths([speciesResearchCachePath(batch, species)]);
 }
 
 async function readSpeciesResearchCache(
