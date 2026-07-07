@@ -1,0 +1,63 @@
+name: SonarQube
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+jobs:
+  analyze:
+    name: SonarQube analysis
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve SonarQube configuration
+        id: sonar_config
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -z "$SONAR_TOKEN" ]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::SONAR_TOKEN is not configured for this repository. Skipping SonarQube analysis."
+            exit 0
+          fi
+
+          organization="${{ vars.SONAR_ORGANIZATION }}"
+          if [ -z "$organization" ]; then
+            organization="${{ github.repository_owner }}"
+          fi
+
+          project_key="${{ vars.SONAR_PROJECT_KEY }}"
+          if [ -z "$project_key" ]; then
+            project_key="${{ github.repository_owner }}_${{ github.event.repository.name }}"
+          fi
+
+          echo "enabled=true" >> "$GITHUB_OUTPUT"
+          echo "organization=$organization" >> "$GITHUB_OUTPUT"
+          echo "project_key=$project_key" >> "$GITHUB_OUTPUT"
+
+      - name: SonarQube scan
+        if: steps.sonar_config.outputs.enabled == 'true'
+        uses: SonarSource/sonarqube-scan-action@v7
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=${{ steps.sonar_config.outputs.organization }}
+            -Dsonar.projectKey=${{ steps.sonar_config.outputs.project_key }}
+            -Dsonar.qualitygate.wait=true
+            -Dsonar.qualitygate.timeout=300
