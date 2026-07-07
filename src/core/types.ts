@@ -33,6 +33,7 @@ export interface TrialRecord {
   pAccession: string;
   sourceAccession: string;
   species: string;
+  family?: string | null;
   treatment: string;
   num: number | null;
   startDate: string | null;
@@ -86,16 +87,94 @@ export interface SpeciesResourceLink {
   purpose: string;
 }
 
+export interface SpeciesTaxonomyMatch {
+  requestedName: string;
+  canonicalName: string | null;
+  scientificName: string | null;
+  rank: string | null;
+  status: string | null;
+  matchType: string | null;
+  confidence: number | null;
+  usageKey: number | null;
+  genus: string | null;
+  family: string | null;
+}
+
+export interface SpeciesResearchSource {
+  id: string;
+  source: "manual";
+  title: string;
+  year: number | null;
+  venue: string | null;
+  url: string;
+  doi: string | null;
+  matchedQuery: string;
+  relevance: "species" | "genus" | "family";
+  abstractSnippet: string | null;
+}
+
+export interface SpeciesResearchTechnique {
+  technique: string;
+  evidenceLevel: "local_species" | "species_literature" | "genus_background" | "family_background" | "mixed";
+  recommendation: string;
+  evidenceSummary: string;
+  deterministicConfidence: ConfidenceLabel;
+  sourceIds: string[];
+  localRows: number[];
+  protocolFrame: string;
+  experimentalControls: string;
+  successCriteria: string;
+  riskChecks: string;
+  whatToTry: string;
+  whatWouldChangeMind: string;
+}
+
+export interface SpeciesResearchResult {
+  species: string;
+  status: "ready" | "no_sources";
+  plantFamily: string | null;
+  familySource: FamilySource;
+  deterministicConfidence: ConfidenceLabel;
+  summary: string;
+  likelyStrategy: string;
+  familyPattern: string;
+  recommendedTechniques: SpeciesResearchTechnique[];
+  protocolGaps: string[];
+  nextTrialDesign: string;
+  caveats: string[];
+  evidenceNotes: string[];
+  localEvidence: SpeciesInsightEvidence[];
+  sources: SpeciesResearchSource[];
+  generatedAt: string;
+  model: string | null;
+}
+
+export type FamilySource = "workbook" | "ai_inferred" | "unknown";
+
+export interface RecommendedTechnique {
+  technique: string;
+  evidenceSummary: string;
+  deterministicConfidence: ConfidenceLabel;
+  citedRows: number[];
+  wouldProve: string;
+  wouldDisprove: string;
+}
+
 export interface SpeciesInsight {
   species: string;
   deterministicConfidence: ConfidenceLabel;
+  plantFamily?: string;
+  familySource?: FamilySource;
   summary: string;
   propagationInterpretation?: string;
+  recommendedTechniques?: RecommendedTechnique[];
+  familyPropagationPattern?: string;
   keyFindings: string[];
   nextSteps: string[];
   trialDesign?: string;
   cautionFlags?: string[];
   confidenceCaveat: string;
+  researchNotes?: string[];
   evidence: SpeciesInsightEvidence[];
   generatedBy: "openai" | "deterministic";
   model: string | null;

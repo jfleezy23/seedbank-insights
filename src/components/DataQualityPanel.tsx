@@ -16,8 +16,8 @@ export function DataQualityPanel({
     <section className="panel guardrail-panel">
       <div className="panel-heading">
         <div>
-          <h2>Evidence guardrails</h2>
-          <p>Designed to slow down false positives and false negatives.</p>
+          <h2>Data quality warnings</h2>
+          <p>Missing fields, underpowered comparisons, and evidence limits that can distort conclusions.</p>
         </div>
       </div>
       <div className="guardrail-list">

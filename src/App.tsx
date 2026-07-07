@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   BarChart3,
@@ -9,9 +9,9 @@ import {
   FlaskConical,
   KeyRound,
   Leaf,
-  ListChecks,
   MessageSquareText,
   Microscope,
+  RefreshCw,
   Save,
   Search,
   Settings2,
@@ -29,8 +29,7 @@ import { PairedComparisonPanel } from "./components/PairedComparisonPanel";
 import { TreatmentChart } from "./components/TreatmentChart";
 import { TrialQueueTable } from "./components/TrialQueueTable";
 import { buildSpeciesResourceLinks } from "./core/speciesResources";
-import type { DashboardData, SpeciesInsight, SpeciesSummary } from "./core/types";
-import { sampleDashboard } from "./data/sampleDashboard";
+import type { DashboardData, SpeciesResearchResult, SpeciesSummary } from "./core/types";
 import "./App.css";
 
 const navItems = [
@@ -44,6 +43,32 @@ const navItems = [
 ] as const;
 
 type NavLabel = (typeof navItems)[number]["label"];
+
+const emptyDashboard: DashboardData = {
+  batch: null,
+  metrics: {
+    trials: 0,
+    accessions: 0,
+    species: 0,
+    treatments: 0,
+    doneRate: 0,
+    observationsExtracted: 0
+  },
+  treatmentSummaries: [],
+  speciesSummaries: [],
+  pairedComparisons: [],
+  trialQueue: [],
+  dataQualityIssues: [],
+  askSuggestions: [],
+  speciesInsights: [],
+  aiInsightStatus: {
+    configured: false,
+    state: "not_configured",
+    message: "Import a workbook to begin.",
+    model: null,
+    generatedAt: null
+  }
+};
 
 function AiStatusPill({ dashboard }: { dashboard: DashboardData }) {
   const status = dashboard.aiInsightStatus;
@@ -80,33 +105,65 @@ function deterministicTrialDesign(summary: SpeciesSummary | undefined): string {
   return "Repeat the current best treatment against control and the nearest alternative, then track liner and 4-inch survival.";
 }
 
-function insightForSpecies(insights: SpeciesInsight[], species: string): SpeciesInsight | undefined {
-  return insights.find((insight) => insight.species === species);
+function researchKey(batchId: number | undefined, species: string): string {
+  return `${batchId ?? "sample"}:${species.toLowerCase()}`;
+}
+
+function familySourceText(source: SpeciesResearchResult["familySource"] | undefined): string {
+  if (source === "workbook") return "Family from workbook";
+  if (source === "ai_inferred") return "Family inferred from taxonomy";
+  return "Family unresolved";
+}
+
+function familyStatusText(research: SpeciesResearchResult | undefined): string {
+  if (research?.plantFamily) return `${research.plantFamily} · ${familySourceText(research.familySource)}`;
+  return "Family unknown until research runs";
+}
+
+function sourceLabel(result: SpeciesResearchResult | undefined, sourceId: string): string {
+  const source = result?.sources.find((candidate) => candidate.id === sourceId);
+  if (!source) return sourceId;
+  const year = source.year ? ` (${source.year})` : "";
+  return `${source.title}${year}`;
+}
+
+function evidenceLevelText(level: SpeciesResearchResult["recommendedTechniques"][number]["evidenceLevel"]): string {
+  switch (level) {
+    case "local_species":
+      return "Local species evidence";
+    case "species_literature":
+      return "Species literature";
+    case "genus_background":
+      return "Genus background";
+    case "family_background":
+      return "Family background";
+    case "mixed":
+      return "Mixed evidence";
+  }
 }
 
 function SpeciesExplorer({
   dashboard,
   aiConfigured,
-  generatingSpeciesInsights,
   actionDisabled,
-  onGenerateSpeciesInsights
+  researchResults,
+  researchErrors,
+  researchingSpecies,
+  onResearchSpecies
 }: {
   dashboard: DashboardData;
   aiConfigured: boolean;
-  generatingSpeciesInsights: boolean;
   actionDisabled: boolean;
-  onGenerateSpeciesInsights: () => void;
+  researchResults: Record<string, SpeciesResearchResult>;
+  researchErrors: Record<string, string>;
+  researchingSpecies: string | null;
+  onResearchSpecies: (species: string, force?: boolean) => void;
 }) {
   const hasBatch = Boolean(dashboard.batch);
-  const hasInsights = dashboard.speciesInsights.length > 0;
-  const canGenerate = aiConfigured && hasBatch && !actionDisabled;
   const speciesOptions = useMemo(() => {
-    const bySpecies = new Map<string, { summary?: SpeciesSummary; insight?: SpeciesInsight }>();
+    const bySpecies = new Map<string, { summary?: SpeciesSummary }>();
     for (const summary of dashboard.speciesSummaries) {
       bySpecies.set(summary.species, { ...(bySpecies.get(summary.species) ?? {}), summary });
-    }
-    for (const insight of dashboard.speciesInsights) {
-      bySpecies.set(insight.species, { ...(bySpecies.get(insight.species) ?? {}), insight });
     }
     return [...bySpecies.entries()]
       .map(([species, value]) => ({ species, ...value }))
@@ -115,16 +172,14 @@ function SpeciesExplorer({
         const bRows = b.summary?.rows ?? 0;
         return bRows - aRows || a.species.localeCompare(b.species);
       });
-  }, [dashboard.speciesInsights, dashboard.speciesSummaries]);
+  }, [dashboard.speciesSummaries]);
   const firstSpecies = speciesOptions[0]?.species ?? "";
   const [selectedSpecies, setSelectedSpecies] = useState(firstSpecies);
   const emptyTitle = !hasBatch
-    ? "Import a workbook before generating species insights."
+    ? "Import a workbook before researching species."
     : !aiConfigured
-      ? "Add an OpenAI key in Settings to generate species insights."
-      : generatingSpeciesInsights
-        ? "Generating species insights from the imported workbook..."
-        : "Generate AI species insights for this import.";
+      ? "Load cached AI research or add an OpenAI key to generate it."
+      : "Select a species to run AI protocol research.";
   useEffect(() => {
     if (!firstSpecies) return;
     if (!speciesOptions.some((option) => option.species === selectedSpecies)) {
@@ -135,34 +190,40 @@ function SpeciesExplorer({
   const selectedSummary =
     dashboard.speciesSummaries.find((summary) => summary.species === selectedSpecies) ?? speciesOptions[0]?.summary;
   const activeSpecies = selectedSummary?.species ?? selectedSpecies;
-  const selectedInsight = insightForSpecies(dashboard.speciesInsights, activeSpecies);
   const selectedLinks = activeSpecies ? buildSpeciesResourceLinks(activeSpecies) : [];
-  const findings = selectedInsight?.keyFindings ?? [deterministicSpeciesRead(selectedSummary)];
-  const nextSteps = selectedInsight?.nextSteps ?? [deterministicTrialDesign(selectedSummary)];
-  const cautionFlags = selectedInsight?.cautionFlags ?? [
-    selectedSummary?.confidence === "Needs replication"
-      ? "Do not treat one high score as a species protocol."
-      : "Keep deterministic confidence labels in front of any narrative interpretation."
-  ];
+  const activeResearchKey = researchKey(dashboard.batch?.id, activeSpecies);
+  const selectedResearch = researchResults[activeResearchKey];
+  const selectedResearchError = researchErrors[activeResearchKey];
+  const isResearching = researchingSpecies === activeSpecies;
+  const canResearch = hasBatch && Boolean(activeSpecies) && !actionDisabled && !isResearching;
+
+  useEffect(() => {
+    if (!hasBatch || !activeSpecies || selectedResearch || selectedResearchError || isResearching) return;
+    onResearchSpecies(activeSpecies, false);
+  }, [activeSpecies, hasBatch, isResearching, onResearchSpecies, selectedResearch, selectedResearchError]);
 
   return (
     <section className="view-stack">
       <section className="panel species-workbench-panel">
         <div className="panel-heading">
           <div>
-            <h2>Species workbench</h2>
+            <h2>AI Species Assessment</h2>
             <p>{dashboard.aiInsightStatus.message}</p>
           </div>
           <div className="species-actions">
             <AiStatusPill dashboard={dashboard} />
-            {aiConfigured && hasBatch ? (
-              <button type="button" onClick={onGenerateSpeciesInsights} disabled={!canGenerate}>
-                <BrainCircuit size={16} />
-                {generatingSpeciesInsights
-                  ? "Generating..."
-                  : hasInsights
-                    ? "Regenerate insights"
-                    : "Generate species insights"}
+            {hasBatch ? (
+              <button type="button" onClick={() => onResearchSpecies(activeSpecies, true)} disabled={!canResearch}>
+                <RefreshCw size={16} />
+                {isResearching
+                  ? "Researching..."
+                  : selectedResearch
+                    ? aiConfigured
+                      ? "Refresh research"
+                      : "Reload cached research"
+                    : aiConfigured
+                      ? "Run research"
+                      : "Load cached research"}
               </button>
             ) : null}
           </div>
@@ -171,7 +232,7 @@ function SpeciesExplorer({
         {speciesOptions.length ? (
           <div className="species-workbench">
             <div className="species-selector" role="listbox" aria-label="Species">
-              {speciesOptions.slice(0, 40).map((option) => (
+              {speciesOptions.map((option) => (
                 <button
                   type="button"
                   className={option.species === activeSpecies ? "active" : ""}
@@ -181,7 +242,7 @@ function SpeciesExplorer({
                   <span>{option.species}</span>
                   <small>
                     {option.summary?.rows ?? 0} rows
-                    {option.insight ? " · AI" : ""}
+                    {researchResults[researchKey(dashboard.batch?.id, option.species)] ? " · researched" : ""}
                   </small>
                 </button>
               ))}
@@ -191,88 +252,229 @@ function SpeciesExplorer({
               <div className="species-detail-heading">
                 <div>
                   <h3>{activeSpecies}</h3>
-                  <span>{selectedInsight ? `AI interpretation · ${selectedInsight.model}` : "Local evidence read"}</span>
+                  <span>{familyStatusText(selectedResearch)}</span>
                 </div>
-                {selectedSummary ? <ConfidenceBadge label={selectedSummary.confidence} /> : null}
               </div>
 
-              <div className="species-metrics">
-                <span>{selectedSummary?.rows ?? 0} rows</span>
-                <span>{selectedSummary?.accessions ?? 0} accessions</span>
-                <span>{selectedSummary?.treatments ?? 0} treatments</span>
-                <span>{selectedSummary?.pcCount ?? 0} PC scores</span>
-                <span>{selectedSummary?.bestTreatment ?? "No leader"}</span>
-              </div>
-
-              <section className="species-detail-section primary">
-                <h4>{selectedInsight ? "Botanist read" : "Deterministic read"}</h4>
-                <p>{selectedInsight?.summary ?? deterministicSpeciesRead(selectedSummary)}</p>
-                {selectedInsight?.propagationInterpretation ? <p>{selectedInsight.propagationInterpretation}</p> : null}
-              </section>
-
-              <div className="species-detail-grid">
-                <section className="species-detail-section">
-                  <h4>Evidence</h4>
-                  <ul>
-                    {findings.slice(0, 4).map((finding) => (
-                      <li key={finding}>{finding}</li>
-                    ))}
-                  </ul>
-                </section>
-
-                <section className="species-detail-section">
-                  <h4>Next trial</h4>
-                  <p>{selectedInsight?.trialDesign ?? deterministicTrialDesign(selectedSummary)}</p>
-                  <ul>
-                    {nextSteps.slice(0, 3).map((step) => (
-                      <li key={step}>{step}</li>
-                    ))}
-                  </ul>
-                </section>
-
-                <section className="species-detail-section">
-                  <h4>Guardrails</h4>
-                  <p>{selectedInsight?.confidenceCaveat ?? "Deterministic confidence remains the decision label."}</p>
-                  <ul>
-                    {cautionFlags.slice(0, 3).map((flag) => (
-                      <li key={flag}>{flag}</li>
-                    ))}
-                  </ul>
-                </section>
-
-                <section className="species-detail-section">
-                  <h4>Source rows</h4>
-                  <div className="evidence-list">
-                    {selectedInsight?.evidence.length ? (
-                      selectedInsight.evidence.slice(0, 4).map((evidence) => (
-                        <span key={`${activeSpecies}-${evidence.sourceRow}-${evidence.treatment}`}>
-                          Row {evidence.sourceRow}: {evidence.treatment} - {evidence.observation}
-                        </span>
-                      ))
-                    ) : (
-                      <span>Generate species insights to bind narrative claims to source rows.</span>
-                    )}
+              {isResearching ? (
+                <section className="species-research-state">
+                  <RefreshCw className="spin" size={22} />
+                  <div>
+                    <h4>{aiConfigured ? "Researching germination evidence" : "Loading cached AI research"}</h4>
+                    <p>
+                      {aiConfigured
+                        ? "Checking taxonomy context and asking OpenAI to synthesize workbook-backed protocol guidance."
+                        : "Looking for a shareable cached response for this species."}
+                    </p>
                   </div>
                 </section>
-              </div>
+              ) : selectedResearch ? (
+                <>
+                  <section className="species-detail-section primary ai-assessment-card">
+                    <h4>
+                      {selectedResearch.status === "no_sources"
+                        ? "No valid local-row technique survived"
+                        : "Research assessment"}
+                    </h4>
+                    <p>{selectedResearch.summary}</p>
+                    <p>{selectedResearch.likelyStrategy}</p>
+                  </section>
 
-              <section className="species-detail-section resources">
-                <div className="resource-heading">
-                  <h4>Learn more</h4>
-                  <span>Curated reference searches for taxonomy, range, and habitat context.</span>
+                  <div className="species-support-grid">
+                    <section className="species-detail-section">
+                      <h4>Family and related-taxon pattern</h4>
+                      <p>{selectedResearch.familyPattern}</p>
+                    </section>
+
+                    <section className="species-detail-section">
+                      <h4>Next trial</h4>
+                      <p>{selectedResearch.nextTrialDesign}</p>
+                    </section>
+                  </div>
+
+                  {selectedResearch.protocolGaps.length ? (
+                    <section className="species-detail-section protocol-gaps-section">
+                      <h4>Protocol gaps to resolve</h4>
+                      <ul>
+                        {selectedResearch.protocolGaps.map((gap) => (
+                          <li key={gap}>{gap}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  ) : null}
+
+                  <section className="species-detail-section technique-section">
+                    <h4>Workbook-backed technique candidates</h4>
+                    {selectedResearch.recommendedTechniques.length ? (
+                      <div className="technique-grid">
+                        {selectedResearch.recommendedTechniques.map((recommendation) => (
+                          <article className="technique-card" key={`${activeSpecies}-${recommendation.technique}`}>
+                            <div>
+                              <strong>{recommendation.technique}</strong>
+                              <ConfidenceBadge label={recommendation.deterministicConfidence} />
+                            </div>
+                            <span className="evidence-level-pill">{evidenceLevelText(recommendation.evidenceLevel)}</span>
+                            <p>{recommendation.recommendation}</p>
+                            <p>{recommendation.evidenceSummary}</p>
+                            <small>
+                              Sources:{" "}
+                              {recommendation.sourceIds.length
+                                ? recommendation.sourceIds.map((sourceId) => sourceLabel(selectedResearch, sourceId)).join("; ")
+                                : "local workbook rows only"}
+                            </small>
+                            <small>
+                              {recommendation.localRows.length
+                                ? `Local rows: ${recommendation.localRows.join(", ")}`
+                                : "No local row directly supports this; treat it as a low-priority hypothesis."}
+                            </small>
+                            <div className="technique-protocol-grid">
+                              <span>
+                                <b>Protocol frame</b>
+                                {recommendation.protocolFrame}
+                              </span>
+                              <span>
+                                <b>Controls</b>
+                                {recommendation.experimentalControls}
+                              </span>
+                              <span>
+                                <b>Success criteria</b>
+                                {recommendation.successCriteria}
+                              </span>
+                              <span>
+                                <b>Risk checks</b>
+                                {recommendation.riskChecks}
+                              </span>
+                            </div>
+                            <div className="technique-proof-grid">
+                              <span>
+                                <b>Try next</b>
+                                {recommendation.whatToTry}
+                              </span>
+                              <span>
+                                <b>Change course if</b>
+                                {recommendation.whatWouldChangeMind}
+                              </span>
+                            </div>
+                          </article>
+                        ))}
+                      </div>
+                    ) : (
+                      <p>No technique recommendation is shown because no valid local-row claim survived validation.</p>
+                    )}
+                  </section>
+
+                  <div className="species-detail-grid">
+                    <section className="species-detail-section">
+                      <h4>Caveats</h4>
+                      <ul>
+                        {selectedResearch.caveats.map((caveat) => (
+                          <li key={caveat}>{caveat}</li>
+                        ))}
+                      </ul>
+                    </section>
+
+                    <section className="species-detail-section">
+                      <h4>Evidence notes</h4>
+                      <ul>
+                        {selectedResearch.evidenceNotes.map((note) => (
+                          <li key={note}>{note}</li>
+                        ))}
+                      </ul>
+                    </section>
+                  </div>
+
+                  {selectedResearch.sources.length ? (
+                    <section className="species-detail-section research-sources">
+                      <div className="resource-heading">
+                        <h4>Reference sources used</h4>
+                        <span>Optional reference context only; workbook rows own the recommendation.</span>
+                      </div>
+                      <div className="species-resource-grid">
+                        {selectedResearch.sources.map((source) => (
+                          <a href={source.url} target="_blank" rel="noreferrer" key={source.id}>
+                            <strong>
+                              {source.title}
+                              <ExternalLink size={13} />
+                            </strong>
+                            <span>
+                              {source.venue ?? source.source}
+                              {source.year ? ` · ${source.year}` : ""} · {source.relevance}
+                            </span>
+                            {source.abstractSnippet ? <span>{source.abstractSnippet}</span> : null}
+                          </a>
+                        ))}
+                      </div>
+                    </section>
+                  ) : null}
+                </>
+              ) : selectedResearchError ? (
+                <section className="species-research-state warning">
+                  <AlertCircle size={22} />
+                  <div>
+                    <h4>Research did not complete</h4>
+                    <p>{selectedResearchError}</p>
+                  </div>
+                </section>
+              ) : !aiConfigured ? (
+                <section className="species-research-state">
+                  <BrainCircuit size={22} />
+                  <div>
+                    <h4>OpenAI key is not configured</h4>
+                    <p>Cached AI research will load when available. Add a key in Settings to generate or refresh research.</p>
+                  </div>
+                </section>
+              ) : (
+                <section className="species-research-state">
+                  <BrainCircuit size={22} />
+                  <div>
+                    <h4>Ready to research this species</h4>
+                    <p>The app will check taxonomy context and synthesize workbook-backed trial guidance.</p>
+                  </div>
+                </section>
+              )}
+
+              {selectedLinks.length ? (
+                <section className="species-detail-section resources">
+                  <div className="resource-heading">
+                    <h4>Regional reference</h4>
+                    <span>Occurrence context only; not treated as germination evidence.</span>
+                  </div>
+                  <div className="species-resource-grid">
+                    {selectedLinks.map((link) => (
+                      <a href={link.url} target="_blank" rel="noreferrer" key={`${activeSpecies}-${link.source}`}>
+                        <strong>
+                          {link.label}
+                          <ExternalLink size={13} />
+                        </strong>
+                        <span>{link.purpose}</span>
+                      </a>
+                    ))}
+                  </div>
+                </section>
+              ) : null}
+
+              <details className="local-evidence-details">
+                <summary>Local workbook evidence and deterministic guardrails</summary>
+                <div className="species-metrics">
+                  <span>{selectedSummary?.rows ?? 0} rows</span>
+                  <span>{selectedSummary?.accessions ?? 0} accessions</span>
+                  <span>{selectedSummary?.treatments ?? 0} treatments</span>
+                  <span>{selectedSummary?.pcCount ?? 0} PC scores</span>
+                  <span>{selectedSummary?.bestTreatment ?? "No leader"}</span>
+                  <span>{selectedSummary?.confidence ?? "No local label"}</span>
                 </div>
-                <div className="species-resource-grid">
-                  {selectedLinks.map((link) => (
-                    <a href={link.url} target="_blank" rel="noreferrer" key={`${activeSpecies}-${link.source}`}>
-                      <strong>
-                        {link.label}
-                        <ExternalLink size={13} />
-                      </strong>
-                      <span>{link.purpose}</span>
-                    </a>
+                <div className="local-evidence-copy">
+                  <p>{deterministicSpeciesRead(selectedSummary)}</p>
+                  <p>{deterministicTrialDesign(selectedSummary)}</p>
+                </div>
+                <div className="evidence-list">
+                  {(selectedResearch?.localEvidence ?? []).slice(0, 5).map((evidence) => (
+                    <span key={`${activeSpecies}-${evidence.sourceRow}-${evidence.treatment}`}>
+                      Row {evidence.sourceRow}: {evidence.treatment} - {evidence.observation}
+                    </span>
                   ))}
                 </div>
-              </section>
+              </details>
             </article>
           </div>
         ) : (
@@ -284,43 +486,6 @@ function SpeciesExplorer({
         )}
       </section>
 
-      <section className="panel species-table-panel">
-        <div className="panel-heading">
-          <div>
-            <h2>Deterministic species summary</h2>
-            <p>Counts and confidence labels are computed locally.</p>
-          </div>
-          <ListChecks size={18} />
-        </div>
-        <table>
-          <thead>
-            <tr>
-              <th>Species</th>
-              <th>Rows</th>
-              <th>Treatments</th>
-              <th>Best treatment</th>
-              <th>Mean PC</th>
-              <th>Signal</th>
-            </tr>
-          </thead>
-          <tbody>
-            {dashboard.speciesSummaries.slice(0, 24).map((summary) => (
-              <tr key={summary.species}>
-                <td>
-                  <strong>{summary.species}</strong>
-                </td>
-                <td>{summary.rows}</td>
-                <td>{summary.treatments}</td>
-                <td>{summary.bestTreatment ?? "None yet"}</td>
-                <td>{summary.bestPcMean === null ? "-" : summary.bestPcMean.toFixed(1)}</td>
-                <td>
-                  <ConfidenceBadge label={summary.confidence} />
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </section>
     </section>
   );
 }
@@ -384,7 +549,7 @@ function SettingsModal({
 }
 
 function App() {
-  const [dashboard, setDashboard] = useState<DashboardData>(sampleDashboard);
+  const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
   const [selectedNav, setSelectedNav] = useState<NavLabel>("Insight Board");
   const [loading, setLoading] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
@@ -392,12 +557,20 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
-  const [generatingSpeciesInsights, setGeneratingSpeciesInsights] = useState(false);
-  const [message, setMessage] = useState("Sample data loaded. Import the PSU workbook for live analysis.");
-  const activeBatchIdRef = useRef<number | null>(sampleDashboard.batch?.id ?? null);
+  const [speciesResearchResults, setSpeciesResearchResults] = useState<Record<string, SpeciesResearchResult>>({});
+  const [speciesResearchErrors, setSpeciesResearchErrors] = useState<Record<string, string>>({});
+  const [researchingSpecies, setResearchingSpecies] = useState<string | null>(null);
+  const [message, setMessage] = useState("Import the PSU workbook to begin.");
+  const activeBatchIdRef = useRef<number | null>(emptyDashboard.batch?.id ?? null);
 
   function applyDashboard(next: DashboardData) {
-    activeBatchIdRef.current = next.batch?.id ?? null;
+    const nextBatchId = next.batch?.id ?? null;
+    if (activeBatchIdRef.current !== nextBatchId) {
+      setSpeciesResearchResults({});
+      setSpeciesResearchErrors({});
+      setResearchingSpecies(null);
+    }
+    activeBatchIdRef.current = nextBatchId;
     setDashboard(next);
   }
 
@@ -430,7 +603,7 @@ function App() {
   const bestComparison = dashboard.pairedComparisons[0];
   const donePercent = Math.round(dashboard.metrics.doneRate * 100);
   const batchLabel = dashboard.batch?.filename ?? "No workbook imported";
-  const busy = loading || savingKey || generatingSpeciesInsights;
+  const busy = loading || savingKey;
 
   const metricCards = useMemo(
     () => [
@@ -498,27 +671,6 @@ function App() {
     }
   }
 
-  async function runSpeciesInsightGeneration(requestedBatchId: number, force: boolean, existingInsights: boolean) {
-    if (!window.seedbank) return;
-    setGeneratingSpeciesInsights(true);
-    setSelectedNav("Species Explorer");
-    setMessage(existingInsights ? "Regenerating cached species insights..." : "Generating species insights from the current import...");
-    try {
-      const next = await window.seedbank.generateSpeciesInsights(force, requestedBatchId);
-      if ((next.batch?.id ?? null) !== activeBatchIdRef.current) {
-        setMessage("Generated species insights for the prior workbook, but a newer import is active.");
-        return;
-      }
-      applyDashboard(next);
-      setAiConfigured(next.aiInsightStatus.configured);
-      setMessage(next.aiInsightStatus.message);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to generate species insights.");
-    } finally {
-      setGeneratingSpeciesInsights(false);
-    }
-  }
-
   async function saveOpenAiKey() {
     if (!window.seedbank || !apiKeyInput.trim() || busy) return;
     const requestedBatchId = dashboard.batch?.id ?? null;
@@ -539,11 +691,7 @@ function App() {
         }
         applyDashboard(status.dashboard);
         if (status.dashboard.batch) {
-          if (status.dashboard.speciesInsights.length) {
-            setMessage("OpenAI key saved. Ask is ready, and cached species insights are available.");
-          } else {
-            setMessage("OpenAI key saved. Ask is ready, and species insights can be generated for this import.");
-          }
+          setMessage("OpenAI key saved. Ask and Species Explorer research are ready for this import.");
         } else {
           setMessage("OpenAI key saved. Import a workbook to use AI features.");
         }
@@ -559,16 +707,46 @@ function App() {
     }
   }
 
-  async function generateSpeciesInsights() {
-    const requestedBatchId = dashboard.batch?.id ?? null;
-    if (requestedBatchId === null || busy) return;
-    await runSpeciesInsightGeneration(requestedBatchId, dashboard.speciesInsights.length > 0, dashboard.speciesInsights.length > 0);
-  }
+  const researchSpecies = useCallback(
+    async (species: string, force = false) => {
+      const requestedBatchId = activeBatchIdRef.current;
+      if (!window.seedbank || requestedBatchId === null || researchingSpecies === species) return;
+      const key = researchKey(requestedBatchId, species);
+      setResearchingSpecies(species);
+      setSpeciesResearchErrors((current) => {
+        const next = { ...current };
+        delete next[key];
+        return next;
+      });
+      setMessage(force ? `Refreshing germination research for ${species}...` : `Researching germination evidence for ${species}...`);
+      try {
+        const result = await window.seedbank.researchSpecies(requestedBatchId, species, force);
+        if (activeBatchIdRef.current !== requestedBatchId) {
+          setMessage("Species research completed for a prior workbook, but a newer import is active.");
+          return;
+        }
+        setSpeciesResearchResults((current) => ({ ...current, [key]: result }));
+        setMessage(
+          result.status === "no_sources"
+            ? `No valid AI technique survived for ${species}; local evidence remains available as an audit trail.`
+            : `Research assessment ready for ${species}.`
+        );
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : "Unable to research this species.";
+        setSpeciesResearchErrors((current) => ({ ...current, [key]: detail }));
+        setMessage(detail);
+      } finally {
+        setResearchingSpecies((current) => (current === species ? null : current));
+      }
+    },
+    [researchingSpecies]
+  );
 
   async function clearOpenAiKey() {
     if (!window.seedbank || busy) return;
     const requestedBatchId = dashboard.batch?.id ?? null;
     setSavingKey(true);
+    setResearchingSpecies(null);
     try {
       const status = await window.seedbank.clearOpenAiKey(requestedBatchId ?? undefined);
       setAiConfigured(status.configured);
@@ -592,7 +770,12 @@ function App() {
 
   const hero = (
     <section className="hero-strip">
-      <img src={seedbankWorkbench} alt="Seed bank workbench with seed packets and germination plates" />
+      <div
+        className="hero-media"
+        role="img"
+        aria-label="Seed bank workbench with seed packets and germination plates"
+        style={{ backgroundImage: `url(${seedbankWorkbench})` }}
+      />
       <div className="hero-copy">
         <span>{message}</span>
         <strong>
@@ -613,6 +796,60 @@ function App() {
       {metricCards.map((card) => (
         <MetricCard key={card.label} {...card} />
       ))}
+    </section>
+  );
+
+  const overview = (
+    <section className="overview-grid">
+      <article className="overview-card">
+        <span>Best paired signal</span>
+        <strong>
+          {bestComparison
+            ? `${bestComparison.treatment} vs ${bestComparison.baseline}`
+            : "No paired comparison yet"}
+        </strong>
+        <p>
+          {bestComparison
+            ? `${bestComparison.confidence}; n=${bestComparison.n}, mean PC lift ${bestComparison.meanDiff}.`
+            : "Import paired control and treatment rows to compare methods."}
+        </p>
+        <button type="button" onClick={() => setSelectedNav("Treatment Comparator")}>
+          Open comparator
+        </button>
+      </article>
+
+      <article className="overview-card">
+        <span>Species assessment</span>
+        <strong>
+          {Object.keys(speciesResearchResults).length
+            ? `${Object.keys(speciesResearchResults).length} researched species`
+            : "Research workbench ready"}
+        </strong>
+        <p>
+          Run species-level AI research with local row evidence, family context, caveats, and next-trial design.
+        </p>
+        <button type="button" onClick={() => setSelectedNav("Species Explorer")}>
+          Open Species Explorer
+        </button>
+      </article>
+
+      <article className="overview-card">
+        <span>Quality checks</span>
+        <strong>{dashboard.dataQualityIssues.length} warnings</strong>
+        <p>Review missing fields, underpowered comparisons, and false-positive or false-negative risk.</p>
+        <button type="button" onClick={() => setSelectedNav("Data Quality")}>
+          Open Data Quality
+        </button>
+      </article>
+
+      <article className="overview-card">
+        <span>Operational follow-up</span>
+        <strong>{dashboard.trialQueue.length} queued rows</strong>
+        <p>Work the ND rows, missing production checks, and next observations separately from analysis.</p>
+        <button type="button" onClick={() => setSelectedNav("Trial Queue")}>
+          Open Trial Queue
+        </button>
+      </article>
     </section>
   );
 
@@ -701,13 +938,7 @@ function App() {
           <>
             {hero}
             {metrics}
-            <section className="dashboard-grid">
-              <PairedComparisonPanel comparisons={dashboard.pairedComparisons} />
-              <TreatmentChart summaries={dashboard.treatmentSummaries} />
-              <DataQualityPanel issues={dashboard.dataQualityIssues} comparisons={dashboard.pairedComparisons} />
-              <TrialQueueTable rows={dashboard.trialQueue} />
-              <AskPanel dashboard={dashboard} aiConfigured={aiConfigured} />
-            </section>
+            {overview}
           </>
         )}
 
@@ -715,9 +946,11 @@ function App() {
           <SpeciesExplorer
             dashboard={dashboard}
             aiConfigured={aiConfigured}
-            generatingSpeciesInsights={generatingSpeciesInsights}
             actionDisabled={busy}
-            onGenerateSpeciesInsights={generateSpeciesInsights}
+            researchResults={speciesResearchResults}
+            researchErrors={speciesResearchErrors}
+            researchingSpecies={researchingSpecies}
+            onResearchSpecies={researchSpecies}
           />
         )}
 
@@ -725,13 +958,11 @@ function App() {
           <section className="view-grid two-column">
             <PairedComparisonPanel comparisons={dashboard.pairedComparisons} />
             <TreatmentChart summaries={dashboard.treatmentSummaries} />
-            <DataQualityPanel issues={dashboard.dataQualityIssues} comparisons={dashboard.pairedComparisons} />
           </section>
         )}
 
         {selectedNav === "Trial Queue" && (
           <section className="view-stack">
-            {metrics}
             <TrialQueueTable rows={dashboard.trialQueue} />
           </section>
         )}

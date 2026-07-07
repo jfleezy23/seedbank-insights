@@ -4,22 +4,32 @@ import path from "node:path";
 import { SeedBankDatabase } from "./database";
 import {
   answerSpreadsheetQuestion,
-  generateSpeciesInsights,
   OPENAI_INSIGHT_MODEL,
   suggestHeaderAliases
 } from "./openai-insights";
+import { researchSpeciesWithExternalSources } from "./species-research";
 import { importWorkbook, inspectWorkbookHeaders } from "../../src/core/workbook";
-import type { AiInsightStatus, DashboardData, ImportResult } from "../../src/core/types";
+import type { AiInsightStatus, DashboardData, ImportBatchSummary, ImportResult, SpeciesResearchResult } from "../../src/core/types";
 
 let mainWindow: BrowserWindow | null = null;
 let splashWindow: BrowserWindow | null = null;
 let database: SeedBankDatabase | null = null;
+const speciesResearchCache = new Map<string, unknown>();
+const speciesResearchInFlight = new Map<string, Promise<SpeciesResearchResult>>();
+const SPECIES_RESEARCH_CACHE_VERSION = "species-research-v4";
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const configuredSplashMs = Number.parseInt(process.env.SEEDBANK_SPLASH_MIN_MS ?? "1100", 10);
 const MIN_SPLASH_MS = Number.isFinite(configuredSplashMs) ? Math.max(0, configuredSplashMs) : 1100;
 let splashShownAt = 0;
 let revealTimer: NodeJS.Timeout | null = null;
 let launchErrorShown = false;
+
+function configureUserDataPath(): void {
+  const override = process.env.SEEDBANK_USER_DATA_DIR?.trim();
+  if (!override) return;
+  fs.mkdirSync(override, { recursive: true });
+  app.setPath("userData", override);
+}
 
 function appRootPath(): string {
   return app.isPackaged ? app.getAppPath() : path.join(__dirname, "../../..");
@@ -47,6 +57,99 @@ function sanitizeErrorMessage(error: unknown): string {
 
 function openAiFailureMessage(action: string): string {
   return `OpenAI ${action} failed. Check Settings, network access, and the API key, then try again.`;
+}
+
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.map((candidate) => path.resolve(candidate)))];
+}
+
+function defaultWorkbookCandidates(): string[] {
+  const roots = [process.cwd(), appRootPath()];
+  if (app.isPackaged) {
+    roots.push(path.resolve(process.resourcesPath, "../../../../.."));
+    roots.push(path.resolve(path.dirname(process.execPath), "../../../../.."));
+  }
+  return uniquePaths(roots).flatMap((root) => [
+    path.join(root, "P_accessions_new.xlsx"),
+    path.join(root, "data/raw/P_accessions_new.xlsx")
+  ]);
+}
+
+function aiResponseCacheDir(): string {
+  return path.join(app.getPath("userData"), "ai-response-cache", SPECIES_RESEARCH_CACHE_VERSION);
+}
+
+function speciesCacheSlug(species: string): string {
+  return species
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+}
+
+function speciesResearchCacheKey(batch: ImportBatchSummary, species: string): string {
+  return `${batch.workbookHash.slice(0, 16)}-${speciesCacheSlug(species)}`;
+}
+
+function speciesResearchCachePath(batch: ImportBatchSummary, species: string): string {
+  return path.join(aiResponseCacheDir(), `${speciesResearchCacheKey(batch, species)}.json`);
+}
+
+function bundledAiResponseCacheDir(): string {
+  return appAssetPath("assets", "ai-response-cache", SPECIES_RESEARCH_CACHE_VERSION);
+}
+
+function speciesResearchCacheCandidatePaths(batch: ImportBatchSummary, species: string): string[] {
+  const filename = `${speciesResearchCacheKey(batch, species)}.json`;
+  return uniquePaths([
+    speciesResearchCachePath(batch, species),
+    path.join(bundledAiResponseCacheDir(), filename)
+  ]);
+}
+
+async function readSpeciesResearchCache(
+  batch: ImportBatchSummary,
+  species: string
+): Promise<SpeciesResearchResult | null> {
+  for (const candidatePath of speciesResearchCacheCandidatePaths(batch, species)) {
+    try {
+      const parsed = JSON.parse(await fs.promises.readFile(candidatePath, "utf8")) as {
+        version?: string;
+        result?: SpeciesResearchResult;
+      };
+      if (parsed.version !== SPECIES_RESEARCH_CACHE_VERSION || parsed.result?.species !== species) continue;
+      return parsed.result;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+        console.warn(`Unable to read species research cache: ${sanitizeErrorMessage(error)}`);
+      }
+    }
+  }
+  return null;
+}
+
+async function writeSpeciesResearchCache(
+  batch: ImportBatchSummary,
+  species: string,
+  result: SpeciesResearchResult
+): Promise<void> {
+  await fs.promises.mkdir(aiResponseCacheDir(), { recursive: true });
+  await fs.promises.writeFile(
+    speciesResearchCachePath(batch, species),
+    JSON.stringify(
+      {
+        version: SPECIES_RESEARCH_CACHE_VERSION,
+        cachedAt: new Date().toISOString(),
+        workbookHash: batch.workbookHash,
+        batchFilename: batch.filename,
+        species,
+        result
+      },
+      null,
+      2
+    )
+  );
 }
 
 function getDatabase(): SeedBankDatabase {
@@ -292,60 +395,40 @@ function optionalBatchId(value: unknown): number | undefined {
 }
 
 function openAiConfigured(): boolean {
-  return fs.existsSync(keyPath()) && safeStorage.isEncryptionAvailable();
+  return Boolean(loadOpenAiKey());
+}
+
+function speciesInImport(importResult: ImportResult, species: string): string | null {
+  const normalized = species.trim().replace(/\s+/g, " ").toLowerCase();
+  return importResult.trials.find((trial) => trial.species.toLowerCase() === normalized)?.species ?? null;
 }
 
 function withOpenAiStatus(dashboard: DashboardData, override?: Partial<AiInsightStatus>): DashboardData {
   const configured = openAiConfigured();
-  const ready = dashboard.speciesInsights.length > 0;
-  const base: AiInsightStatus = ready
+  const base: AiInsightStatus = configured
     ? {
         configured,
-        state: "ready",
-        message: `Cached species insights available for ${dashboard.speciesInsights.length} species.`,
-        model: dashboard.speciesInsights[0]?.model ?? OPENAI_INSIGHT_MODEL,
-        generatedAt: dashboard.speciesInsights[0]?.generatedAt ?? null
+        state: "not_generated",
+        message: dashboard.batch
+          ? "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite."
+          : "OpenAI is configured. Import a workbook to research species.",
+        model: OPENAI_INSIGHT_MODEL,
+        generatedAt: null
       }
-    : configured
-      ? {
-          configured,
-          state: "not_generated",
-          message: dashboard.batch
-            ? "OpenAI is configured. Generate species insights for this import."
-            : "OpenAI is configured. Import a workbook to generate species insights.",
-          model: OPENAI_INSIGHT_MODEL,
-          generatedAt: null
-        }
-      : {
-          configured,
-          state: "not_configured",
-          message: "OpenAI is optional. Add an API key to generate cached species insights on import.",
-          model: OPENAI_INSIGHT_MODEL,
-          generatedAt: null
-        };
-  return { ...dashboard, aiInsightStatus: { ...base, ...override, configured } };
+    : {
+        configured,
+        state: "not_configured",
+        message: "OpenAI is optional. Add an API key to research species and use Ask.",
+        model: OPENAI_INSIGHT_MODEL,
+        generatedAt: null
+      };
+  return { ...dashboard, speciesInsights: [], aiInsightStatus: { ...base, ...override, configured } };
 }
 
-async function saveImportAndMaybeGenerateAi(result: ImportResult): Promise<DashboardData> {
+async function saveImportWithAiStatus(result: ImportResult): Promise<DashboardData> {
+  speciesResearchCache.clear();
   const saved = getDatabase().saveImport(result);
-  const batchId = saved.batch?.id;
-  const apiKey = loadOpenAiKey();
-  if (!batchId || !apiKey) return withOpenAiStatus(saved);
-
-  try {
-    const insights = await generateSpeciesInsights({ apiKey, importResult: result, dashboard: saved });
-    getDatabase().saveSpeciesInsights(batchId, insights);
-    return withOpenAiStatus(getDatabase().getDashboard(batchId));
-  } catch (error) {
-    const message = openAiFailureMessage("species insight generation");
-    console.warn(`OpenAI species insight generation failed: ${sanitizeErrorMessage(error)}`);
-    return withOpenAiStatus(saved, {
-      state: "error",
-      message,
-      model: OPENAI_INSIGHT_MODEL,
-      generatedAt: null
-    });
-  }
+  return withOpenAiStatus(saved);
 }
 
 async function generateSpeciesInsightsForBatch({
@@ -379,38 +462,13 @@ async function generateSpeciesInsightsForBatch({
     });
   }
 
-  if (!force && current.speciesInsights.length) return withOpenAiStatus(current);
-
-  const importResult = getDatabase().getImportResult(activeBatchId);
-  if (!importResult) {
-    return withOpenAiStatus(current, {
-      state: "error",
-      message: "Could not reconstruct the requested import batch from local SQLite.",
-      model: OPENAI_INSIGHT_MODEL,
-      generatedAt: null
-    });
-  }
-
-  try {
-    const insights = await generateSpeciesInsights({
-      apiKey,
-      importResult,
-      dashboard: current
-    });
-    if (!insights.length) {
-      throw new Error("OpenAI returned no species insights.");
-    }
-    getDatabase().saveSpeciesInsights(activeBatchId, insights);
-    return withOpenAiStatus(getDatabase().getDashboard(activeBatchId));
-  } catch (error) {
-    console.warn(`OpenAI species insight generation failed: ${sanitizeErrorMessage(error)}`);
-    return withOpenAiStatus(current, {
-      state: "error",
-      message: openAiFailureMessage("species insight generation"),
-      model: OPENAI_INSIGHT_MODEL,
-      generatedAt: null
-    });
-  }
+  void force;
+  return withOpenAiStatus(current, {
+    state: "not_generated",
+    message: "Species Explorer research runs live per species and is not stored in SQLite.",
+    model: OPENAI_INSIGHT_MODEL,
+    generatedAt: null
+  });
 }
 
 async function importWorkbookWithOptionalAiPrep(filePath: string): Promise<ImportResult> {
@@ -449,19 +507,16 @@ ipcMain.handle("workbook:select", async () => {
   if (result.canceled || !result.filePaths[0]) return null;
   assertWorkbookPath(result.filePaths[0]);
   const imported = await importWorkbookWithOptionalAiPrep(result.filePaths[0]);
-  return saveImportAndMaybeGenerateAi(imported);
+  return saveImportWithAiStatus(imported);
 });
 
 ipcMain.handle("workbook:importLocalDefault", async () => {
-  const candidates = [
-    path.join(process.cwd(), "P_accessions_new.xlsx"),
-    path.join(process.cwd(), "data/raw/P_accessions_new.xlsx")
-  ];
+  const candidates = defaultWorkbookCandidates();
   const found = candidates.find((candidate) => fs.existsSync(candidate));
   if (!found) return null;
   assertWorkbookPath(found);
   const imported = await importWorkbookWithOptionalAiPrep(found);
-  return saveImportAndMaybeGenerateAi(imported);
+  return saveImportWithAiStatus(imported);
 });
 
 ipcMain.handle("openai:status", () => ({
@@ -504,6 +559,62 @@ ipcMain.handle("openai:generateSpeciesInsights", async (_event, force?: boolean,
   generateSpeciesInsightsForBatch({ batchId: optionalBatchId(batchId), force: Boolean(force) })
 );
 
+ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, species: unknown, force?: boolean) => {
+  const activeBatchId = optionalBatchId(batchId);
+  const requestedSpecies = String(species ?? "").trim().replace(/\s+/g, " ");
+  if (!activeBatchId) throw new Error("Import a workbook before researching a species.");
+  if (requestedSpecies.length < 3) throw new Error("Select a species before running research.");
+  if (requestedSpecies.length > 160) throw new Error("Selected species name is too long for this research demo.");
+
+  const importResult = getDatabase().getImportResult(activeBatchId);
+  if (!importResult) throw new Error("Could not reconstruct the requested import batch from local SQLite.");
+  const localSpecies = speciesInImport(importResult, requestedSpecies);
+  if (!localSpecies) throw new Error("Select a species from the imported workbook before running research.");
+  const batch = importResult.batch;
+
+  const cacheKey = speciesResearchCacheKey(batch, localSpecies);
+  if (!force && speciesResearchCache.has(cacheKey)) return speciesResearchCache.get(cacheKey);
+  if (!force) {
+    const cached = await readSpeciesResearchCache(batch, localSpecies);
+    if (cached) {
+      speciesResearchCache.set(cacheKey, cached);
+      return cached;
+    }
+  }
+
+  const apiKey = loadOpenAiKey();
+  if (!apiKey) {
+    throw new Error("No cached AI research was found for this species. Add an OpenAI key to generate it.");
+  }
+
+  const dashboard = withOpenAiStatus(getDatabase().getDashboard(activeBatchId));
+  const existing = speciesResearchInFlight.get(cacheKey);
+  if (existing) return existing;
+
+  try {
+    const pending = researchSpeciesWithExternalSources({
+      apiKey,
+      species: localSpecies,
+      importResult,
+      dashboard
+    });
+    speciesResearchInFlight.set(cacheKey, pending);
+    const result = await pending;
+    if (result.status === "ready") {
+      speciesResearchCache.set(cacheKey, result);
+      await writeSpeciesResearchCache(batch, localSpecies, result).catch((error: unknown) => {
+        console.warn(`Unable to write species research cache: ${sanitizeErrorMessage(error)}`);
+      });
+    }
+    return result;
+  } catch (error) {
+    console.warn(`OpenAI species research failed: ${sanitizeErrorMessage(error)}`);
+    throw new Error(openAiFailureMessage("species research"));
+  } finally {
+    speciesResearchInFlight.delete(cacheKey);
+  }
+});
+
 ipcMain.handle("openai:ask", async (_event, question: string) => {
   const trimmed = String(question ?? "").trim();
   if (trimmed.length < 3) throw new Error("Ask a more specific question.");
@@ -521,6 +632,8 @@ ipcMain.handle("openai:ask", async (_event, question: string) => {
     throw new Error(openAiFailureMessage("Ask"));
   }
 });
+
+configureUserDataPath();
 
 app.whenReady().then(() => {
   if (process.platform === "darwin" && !app.isPackaged) {

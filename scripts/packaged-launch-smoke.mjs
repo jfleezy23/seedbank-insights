@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, statSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { _electron as electron, chromium } from "playwright";
@@ -29,6 +29,8 @@ const artifactDir = path.join(os.tmpdir(), "seedbank-insights-smoke");
 const splashScreenshot = path.join(artifactDir, "splash.png");
 const mainScreenshot = path.join(artifactDir, "main-window.png");
 const bundleIconPreview = path.join(artifactDir, "bundle-icon.png");
+const smokeUserDataDir = mkdtempSync(path.join(os.tmpdir(), "seedbank-insights-user-data-"));
+const localWorkbookPath = path.join(process.cwd(), "P_accessions_new.xlsx");
 
 if (!existsSync(appBinary)) {
   throw new Error(`Packaged app binary was not found: ${appBinary}`);
@@ -176,7 +178,8 @@ const electronApp = await electron.launch({
   executablePath: appBinary,
   env: {
     ...process.env,
-    SEEDBANK_SPLASH_MIN_MS: "3000"
+    SEEDBANK_SPLASH_MIN_MS: "3000",
+    SEEDBANK_USER_DATA_DIR: smokeUserDataDir
   }
 });
 try {
@@ -190,14 +193,22 @@ try {
   await window.waitForLoadState("domcontentloaded", { timeout: 15_000 });
   await window.getByRole("heading", { name: "Insight Board" }).waitFor({ timeout: 15_000 });
   await window.getByRole("img", { name: "Portland State University" }).waitFor({ timeout: 15_000 });
-  await window.getByText("Evidence guardrails").waitFor({ timeout: 15_000 });
-  await window.getByRole("heading", { name: "Treatment success" }).waitFor({ timeout: 15_000 });
+  await window.getByText("Best paired signal").waitFor({ timeout: 15_000 });
+  await window.getByText("Species assessment").waitFor({ timeout: 15_000 });
+  await window.getByRole("button", { name: "Open Species Explorer" }).waitFor({ timeout: 15_000 });
+  if (existsSync(localWorkbookPath)) {
+    await window.getByRole("button", { name: "Load local workbook" }).click();
+    await window.getByText(/Imported P_accessions_new\.xlsx/).waitFor({ timeout: 25_000 });
+    await window.getByText("128").first().waitFor({ timeout: 10_000 });
+  }
   await window.screenshot({ path: mainScreenshot });
   console.log("Packaged app launch smoke passed");
   console.log(`${iconResourceLabel}: ${iconResource}`);
   if (process.platform === "darwin") console.log(`Bundle icon preview: ${bundleIconPreview}`);
   console.log(`Splash screenshot: ${splashScreenshot}`);
   console.log(`Main window screenshot: ${mainScreenshot}`);
+  console.log(`Smoke user data: ${smokeUserDataDir}`);
+  if (existsSync(localWorkbookPath)) console.log("Local default workbook import smoke passed");
 } finally {
   await electronApp.close();
 }

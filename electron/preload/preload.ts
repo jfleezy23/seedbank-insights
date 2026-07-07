@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AskAnswer, DashboardData } from "../../src/core/types";
+import type { AskAnswer, DashboardData, SpeciesResearchResult } from "../../src/core/types";
 
 export interface OpenAiStatus {
   configured: boolean;
@@ -15,6 +15,7 @@ export interface SeedBankApi {
   saveOpenAiKey(key: string, batchId?: number): Promise<OpenAiStatus>;
   clearOpenAiKey(batchId?: number): Promise<OpenAiStatus>;
   generateSpeciesInsights(force?: boolean, batchId?: number): Promise<DashboardData>;
+  researchSpecies(batchId: number, species: string, force?: boolean): Promise<SpeciesResearchResult>;
   askQuestion(question: string): Promise<AskAnswer>;
 }
 
@@ -26,6 +27,7 @@ const api: SeedBankApi = {
   saveOpenAiKey: (key, batchId) => ipcRenderer.invoke("openai:saveKey", key, batchId),
   clearOpenAiKey: (batchId) => ipcRenderer.invoke("openai:clearKey", batchId),
   generateSpeciesInsights: (force, batchId) => ipcRenderer.invoke("openai:generateSpeciesInsights", force, batchId),
+  researchSpecies: (batchId, species, force) => ipcRenderer.invoke("openai:researchSpecies", batchId, species, force),
   askQuestion: (question) => ipcRenderer.invoke("openai:ask", question)
 };
 

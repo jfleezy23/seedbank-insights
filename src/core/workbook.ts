@@ -24,6 +24,7 @@ const HEADER_ALIAS_GROUPS: Array<[string, string[]]> = [
     ["P_Accession", ["P Accession", "Propagation Accession", "PAccession", "P Acc"]],
     ["Source_Accession", ["Source Accession", "Source", "Seed Bank Accession", "S Accession"]],
     ["Species", ["Taxon", "Scientific Name", "Species Name"]],
+    ["Family", ["Plant Family", "Taxon Family"]],
     ["Trt", ["Treatment", "Treatments", "Treatment String"]],
     ["Num", ["Number", "Count", "N"]],
     ["Start", ["Start Date", "Sown", "Sow Date"]],
@@ -160,6 +161,7 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
   const pAccession = stringValue(get(row, "P_Accession"));
   const sourceAccession = stringValue(get(row, "Source_Accession"));
   const species = stringValue(get(row, "Species"));
+  const family = stringValue(get(row, "Family", "Plant Family", "Taxon Family"));
   const treatment = stringValue(get(row, "Trt"));
 
   if (!pAccession && !sourceAccession && !species && !treatment) return null;
@@ -171,6 +173,7 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
     pAccession,
     sourceAccession: sourceAccession ?? "",
     species,
+    family,
     treatment,
     num: numberValue(get(row, "Num")),
     startDate: dateValue(get(row, "Start")),

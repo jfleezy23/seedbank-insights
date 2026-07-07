@@ -1,12 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { buildSpeciesResourceLinks } from "../../src/core/speciesResources";
+import { buildSpeciesResourceLinks, isSpeciesSpecificResourceUrl } from "../../src/core/speciesResources";
 
 describe("species resource links", () => {
-  it("builds curated species reference links with deterministic source labels", () => {
+  it("keeps only taxon-specific visible reference links", () => {
     const links = buildSpeciesResourceLinks("Lomatium testii");
-    expect(links.map((link) => link.source)).toContain("GBIF");
     expect(links.map((link) => link.source)).toContain("Consortium of Pacific Northwest Herbaria");
-    expect(links.find((link) => link.source === "GBIF")?.url).toContain("Lomatium%20testii");
+    expect(links.map((link) => link.source)).not.toContain("GBIF");
     expect(links.find((link) => link.source === "Consortium of Pacific Northwest Herbaria")?.url).toContain(
       "Genus=Lomatium&Species=testii"
     );
@@ -21,5 +20,15 @@ describe("species resource links", () => {
     );
     expect(pnwLink?.url).toContain("Genus=Lomatium&Species=grayi");
     expect(pnwLink?.url).toContain("Infraspecies=var.%20depauperatum");
+  });
+
+  it("rejects generic resource URLs that do not include the taxon", () => {
+    expect(isSpeciesSpecificResourceUrl("Phacelia heterophylla", "https://www.gbif.org/species/search")).toBe(false);
+    expect(
+      isSpeciesSpecificResourceUrl(
+        "Phacelia heterophylla",
+        "https://www.pnwherbaria.org/data/results.php?Genus=Phacelia&Species=heterophylla"
+      )
+    ).toBe(true);
   });
 });

@@ -17,6 +17,7 @@ export interface AskContext {
     accession: string;
     sourceAccession: string;
     species: string;
+    family: string | null;
     treatment: string;
     num: number | null;
     pc: number | null;
@@ -92,6 +93,7 @@ function trialFromRow(row: Record<string, unknown>): TrialRecord {
     pAccession: textValue(row.p_accession),
     sourceAccession: textValue(row.source_accession),
     species: textValue(row.species),
+    family: nullableText(row.family),
     treatment: textValue(row.treatment),
     num: numberOrNull(row.num),
     startDate: nullableText(row.start_date),
@@ -199,6 +201,7 @@ export class SeedBankDatabase {
         p_accession TEXT NOT NULL,
         source_accession TEXT NOT NULL,
         species TEXT NOT NULL,
+        family TEXT,
         treatment TEXT NOT NULL,
         num REAL,
         start_date TEXT,
@@ -259,6 +262,7 @@ export class SeedBankDatabase {
 
     `);
     this.ensureObservationImportBatchId();
+    this.ensureTrialFamilyColumn();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_observations_import_batch_id
         ON observations(import_batch_id);
@@ -281,6 +285,12 @@ export class SeedBankDatabase {
       )
       WHERE import_batch_id IS NULL;
     `);
+  }
+
+  private ensureTrialFamilyColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(trials)").all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "family")) return;
+    this.db.exec("ALTER TABLE trials ADD COLUMN family TEXT;");
   }
 
   saveSpeciesInsights(importBatchId: number, insights: SpeciesInsight[]): void {
@@ -328,13 +338,13 @@ export class SeedBankDatabase {
       const trialStmt = this.db.prepare(`
         INSERT INTO trials (
           id, import_batch_id, source_row, p_accession, source_accession,
-          species, treatment, num, start_date, propagule_type, ttd, pc,
+          species, family, treatment, num, start_date, propagule_type, ttd, pc,
           ced, wsed, csed, liner_start, liner_ttd, lpc, four_start,
           four_ttd, four_pc, location, status, pcd, notes,
           treatment_components_json
         ) VALUES (
           @id, @importBatchId, @sourceRow, @pAccession, @sourceAccession,
-          @species, @treatment, @num, @startDate, @propaguleType, @ttd, @pc,
+          @species, @family, @treatment, @num, @startDate, @propaguleType, @ttd, @pc,
           @ced, @wsed, @csed, @linerStart, @linerTtd, @lpc, @fourStart,
           @fourTtd, @fourPc, @location, @status, @pcd, @notes,
           @treatmentComponentsJson
@@ -345,6 +355,7 @@ export class SeedBankDatabase {
         trialStmt.run({
           ...trial,
           importBatchId: batchId,
+          family: trial.family ?? null,
           treatmentComponentsJson: JSON.stringify(trial.treatmentComponents)
         });
       }
@@ -442,23 +453,9 @@ export class SeedBankDatabase {
       .prepare("SELECT * FROM data_quality_issues WHERE import_batch_id = ? ORDER BY id")
       .all(batch) as Array<Record<string, unknown>>;
 
-    const insightRows = this.db
-      .prepare(
-        "SELECT payload_json FROM insights WHERE import_batch_id = ? AND kind = 'species_insight' ORDER BY label"
-      )
-      .all(batch) as Array<{ payload_json: string }>;
-
     const trials = trialRows.map(trialFromRow);
     const observations = observationRows.map(observationFromRow);
     const importIssues = issueRows.map(issueFromRow);
-
-    const speciesInsights: SpeciesInsight[] = insightRows.flatMap((row) => {
-      try {
-        return [JSON.parse(row.payload_json) as SpeciesInsight];
-      } catch {
-        return [];
-      }
-    });
 
     return buildDashboardData(
       trials,
@@ -467,7 +464,7 @@ export class SeedBankDatabase {
         ? batchSummaryFromRow(batchRow)
         : null,
       importIssues,
-      speciesInsights
+      []
     );
   }
 
@@ -478,7 +475,7 @@ export class SeedBankDatabase {
 
     const trials = this.db
       .prepare(
-        `SELECT source_row, p_accession, source_accession, species, treatment, num, pc, lpc,
+        `SELECT source_row, p_accession, source_accession, species, family, treatment, num, pc, lpc,
           four_pc, status, notes
          FROM trials
          WHERE import_batch_id = ?
@@ -504,6 +501,7 @@ export class SeedBankDatabase {
         accession: String(row.p_accession),
         sourceAccession: String(row.source_accession),
         species: String(row.species),
+        family: nullableText(row.family),
         treatment: String(row.treatment),
         num: row.num === null ? null : Number(row.num),
         pc: row.pc === null ? null : Number(row.pc),

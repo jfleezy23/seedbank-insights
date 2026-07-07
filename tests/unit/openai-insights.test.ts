@@ -15,6 +15,7 @@ function trial(partial: Partial<TrialRecord> & Pick<TrialRecord, "pAccession" | 
     pAccession: partial.pAccession,
     sourceAccession: partial.sourceAccession ?? "SRC",
     species: partial.species,
+    family: partial.family ?? null,
     treatment: partial.treatment,
     num: partial.num ?? 25,
     startDate: partial.startDate ?? "2025-01-01",
@@ -70,13 +71,27 @@ describe("OpenAI species insight validation", () => {
         speciesInsights: [
           {
             species: "Lomatium testii",
+            plantFamily: "Apiaceae",
+            familySource: "ai_inferred",
             summary: "Cold stratification is promising but still needs replication.",
             propagationInterpretation: "The submitted rows suggest cold stratification is the treatment worth repeating.",
+            recommendedTechniques: [
+              {
+                technique: "CS",
+                evidenceSummary: "CS has the best cited PC rows for this species.",
+                deterministicConfidence: "Promising",
+                citedRows: [3, 999],
+                wouldProve: "More paired accessions repeat the PC lift and survive liner follow-up.",
+                wouldDisprove: "Control trays match CS after replication."
+              }
+            ],
+            familyPropagationPattern: "Apiaceae taxa often require dormancy-aware stratification trials.",
             keyFindings: ["CS has the highest PC scores in the submitted rows."],
             nextSteps: ["Repeat paired control and CS trays."],
             trialDesign: "Run at least three paired accessions with C and CS treatments and record PC plus liner survival.",
             cautionFlags: ["Only a small number of accessions are represented."],
             confidenceCaveat: "The deterministic label remains underpowered.",
+            researchNotes: ["Verify taxon and family context against a botanical reference before protocolizing."],
             evidence: [
               { sourceRow: 3, accession: "MODEL-WRONG", treatment: "MODEL-WRONG", observation: "MODEL-WRONG" },
               { sourceRow: 999, accession: "P9", treatment: "CS", observation: "ignored" }
@@ -97,8 +112,117 @@ describe("OpenAI species insight validation", () => {
       treatment: "CS",
       observation: "PC 5; status ND"
     });
+    expect(insights[0].plantFamily).toBe("Apiaceae");
+    expect(insights[0].familySource).toBe("ai_inferred");
+    expect(insights[0].recommendedTechniques).toEqual([
+      {
+        technique: "CS",
+        evidenceSummary: "CS has the best cited PC rows for this species.",
+        deterministicConfidence: "Promising",
+        citedRows: [3],
+        wouldProve: "More paired accessions repeat the PC lift and survive liner follow-up.",
+        wouldDisprove: "Control trays match CS after replication."
+      }
+    ]);
     expect(insights[0].propagationInterpretation).toContain("cold stratification");
     expect(insights[0].model).toBe("gpt-5.5");
+  });
+
+  it("preserves workbook family over AI-inferred family", () => {
+    const contexts = buildSpeciesInsightContexts(
+      importResult([
+        trial({
+          pAccession: "P1",
+          species: "Lomatium testii",
+          family: "Apiaceae",
+          treatment: "CS",
+          pc: 5,
+          sourceRow: 3
+        })
+      ])
+    );
+    const insights = parseSpeciesInsightResponse(
+      JSON.stringify({
+        speciesInsights: [
+          {
+            species: "Lomatium testii",
+            plantFamily: "Wrongaceae",
+            familySource: "ai_inferred",
+            summary: "Cold stratification still needs replication.",
+            propagationInterpretation: "CS is a candidate treatment from the submitted row.",
+            recommendedTechniques: [
+              {
+                technique: "CS",
+                evidenceSummary: "Row 3 has the useful PC score.",
+                deterministicConfidence: "Needs replication",
+                citedRows: [3],
+                wouldProve: "Additional paired rows repeat the result.",
+                wouldDisprove: "Control rows match the treatment."
+              }
+            ],
+            familyPropagationPattern: "Use the workbook family as authoritative.",
+            keyFindings: ["Row 3 is the only cited lead."],
+            nextSteps: ["Add paired controls."],
+            trialDesign: "Repeat with controls.",
+            cautionFlags: ["Single-row evidence."],
+            confidenceCaveat: "Needs replication remains authoritative.",
+            researchNotes: ["Workbook family should win over inferred family."],
+            evidence: [{ sourceRow: 3, accession: "P1", treatment: "CS", observation: "PC 5" }]
+          }
+        ]
+      }),
+      contexts
+    );
+
+    expect(insights[0].plantFamily).toBe("Apiaceae");
+    expect(insights[0].familySource).toBe("workbook");
+  });
+
+  it("strips technique recommendations that do not cite species source rows", () => {
+    const contexts = buildSpeciesInsightContexts(
+      importResult([
+        trial({ pAccession: "P1", species: "Lomatium testii", treatment: "CS", pc: 5, sourceRow: 3 })
+      ])
+    );
+    const insights = parseSpeciesInsightResponse(
+      JSON.stringify({
+        speciesInsights: [
+          {
+            species: "Lomatium testii",
+            plantFamily: "Apiaceae",
+            familySource: "ai_inferred",
+            summary: "Cold stratification still needs replication.",
+            propagationInterpretation: "CS is a candidate treatment from the submitted row.",
+            recommendedTechniques: [
+              {
+                technique: "GA3",
+                evidenceSummary: "This model claim should not survive without valid rows.",
+                deterministicConfidence: "Needs replication",
+                citedRows: [999],
+                wouldProve: "More rows.",
+                wouldDisprove: "No rows."
+              }
+            ],
+            familyPropagationPattern: "Family context remains tentative.",
+            keyFindings: ["Row 3 is the only real evidence."],
+            nextSteps: ["Add paired controls."],
+            trialDesign: "Repeat with controls.",
+            cautionFlags: ["Single-row evidence."],
+            confidenceCaveat: "Needs replication remains authoritative.",
+            researchNotes: ["Do not show uncited model technique claims."],
+            evidence: [{ sourceRow: 3, accession: "P1", treatment: "CS", observation: "PC 5" }]
+          }
+        ]
+      }),
+      contexts
+    );
+
+    expect(insights[0].recommendedTechniques).toHaveLength(1);
+    expect(insights[0].recommendedTechniques?.[0]).toMatchObject({
+      technique: "CS",
+      citedRows: [3],
+      deterministicConfidence: "Needs replication"
+    });
   });
 
   it("rejects malformed output that tries to add a confidence label", () => {
@@ -111,14 +235,28 @@ describe("OpenAI species insight validation", () => {
           speciesInsights: [
             {
               species: "Lomatium testii",
+              plantFamily: "Apiaceae",
+              familySource: "ai_inferred",
               summary: "Looks strong.",
               confidence: "Strong signal",
               propagationInterpretation: "High PC may reflect a useful pretreatment.",
+              recommendedTechniques: [
+                {
+                  technique: "CS",
+                  evidenceSummary: "High PC.",
+                  deterministicConfidence: "Needs replication",
+                  citedRows: [2],
+                  wouldProve: "More rows.",
+                  wouldDisprove: "Control rows match."
+                }
+              ],
+              familyPropagationPattern: "Family context is tentative.",
               keyFindings: ["High PC."],
               nextSteps: ["Roll out broadly."],
               trialDesign: "Use a broad rollout.",
               cautionFlags: ["No caveats."],
               confidenceCaveat: "None.",
+              researchNotes: ["None."],
               evidence: [{ sourceRow: 2, accession: "P1", treatment: "CS", observation: "PC 5" }]
             }
           ]
@@ -143,13 +281,27 @@ describe("OpenAI species insight validation", () => {
           speciesInsights: [
             {
               species: "Lomatium testii",
+              plantFamily: "Apiaceae",
+              familySource: "ai_inferred",
               summary: "This is a Strong signal.",
               propagationInterpretation: "Cold stratification may be useful.",
+              recommendedTechniques: [
+                {
+                  technique: "CS",
+                  evidenceSummary: "CS has high PC scores.",
+                  deterministicConfidence: "Promising",
+                  citedRows: [3],
+                  wouldProve: "More paired trays repeat it.",
+                  wouldDisprove: "Controls match it."
+                }
+              ],
+              familyPropagationPattern: "Apiaceae context is useful.",
               keyFindings: ["CS has high PC scores."],
               nextSteps: ["Repeat paired trays."],
               trialDesign: "Repeat the paired comparison.",
               cautionFlags: ["Still underpowered."],
               confidenceCaveat: "The deterministic label remains promising.",
+              researchNotes: ["Check taxonomy."],
               evidence: [{ sourceRow: 3, accession: "P1", treatment: "CS", observation: "PC 5" }]
             }
           ]

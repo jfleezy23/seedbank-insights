@@ -5,15 +5,21 @@ import type {
   ConfidenceLabel,
   AskAnswer,
   DashboardData,
+  FamilySource,
   ImportResult,
   ParsedObservation,
+  RecommendedTechnique,
   SpeciesInsight,
   SpeciesInsightEvidence,
+  SpeciesResearchResult,
+  SpeciesResearchSource,
+  SpeciesResearchTechnique,
+  SpeciesTaxonomyMatch,
   TrialRecord
 } from "../../src/core/types";
 
 export const OPENAI_INSIGHT_MODEL = "gpt-5.5";
-export const SPECIES_INSIGHT_SCHEMA_VERSION = "species-insight-v1";
+export const SPECIES_INSIGHT_SCHEMA_VERSION = "species-insight-v2";
 
 const EvidenceSchema = z
   .object({
@@ -24,16 +30,32 @@ const EvidenceSchema = z
   })
   .strict();
 
+const RecommendedTechniqueDraftSchema = z
+  .object({
+    technique: z.string().min(1),
+    evidenceSummary: z.string().min(1),
+    deterministicConfidence: z.enum(["Strong signal", "Promising", "Inconclusive", "Needs replication"]),
+    citedRows: z.array(z.number().int().positive()).min(1).max(8),
+    wouldProve: z.string().min(1),
+    wouldDisprove: z.string().min(1)
+  })
+  .strict();
+
 const SpeciesInsightDraftSchema = z
   .object({
     species: z.string(),
+    plantFamily: z.string().min(1),
+    familySource: z.enum(["workbook", "ai_inferred", "unknown"]),
     summary: z.string().min(1),
     propagationInterpretation: z.string().min(1),
+    recommendedTechniques: z.array(RecommendedTechniqueDraftSchema).min(1).max(4),
+    familyPropagationPattern: z.string().min(1),
     keyFindings: z.array(z.string().min(1)).min(1).max(4),
     nextSteps: z.array(z.string().min(1)).min(1).max(4),
     trialDesign: z.string().min(1),
     cautionFlags: z.array(z.string().min(1)).min(1).max(4),
     confidenceCaveat: z.string().min(1),
+    researchNotes: z.array(z.string().min(1)).min(1).max(4),
     evidence: z.array(EvidenceSchema).min(1).max(5)
   })
   .strict();
@@ -49,6 +71,39 @@ const AskAnswerResponseSchema = z
     answer: z.string().min(1),
     caveats: z.array(z.string().min(1)).min(1).max(5),
     citedRows: z.array(z.number().int().positive()).max(12)
+  })
+  .strict();
+
+const SpeciesResearchTechniqueDraftSchema = z
+  .object({
+    technique: z.string().min(1),
+    evidenceLevel: z.enum(["local_species", "species_literature", "genus_background", "family_background", "mixed"]),
+    recommendation: z.string().min(1),
+    evidenceSummary: z.string().min(1),
+    deterministicConfidence: z.enum(["Strong signal", "Promising", "Inconclusive", "Needs replication"]),
+    sourceIds: z.array(z.string().min(1)).max(8),
+    localRows: z.array(z.number().int().positive()).max(8),
+    protocolFrame: z.string().min(1),
+    experimentalControls: z.string().min(1),
+    successCriteria: z.string().min(1),
+    riskChecks: z.string().min(1),
+    whatToTry: z.string().min(1),
+    whatWouldChangeMind: z.string().min(1)
+  })
+  .strict();
+
+const SpeciesResearchResponseSchema = z
+  .object({
+    plantFamily: z.string().min(1),
+    familySource: z.enum(["workbook", "ai_inferred", "unknown"]),
+    summary: z.string().min(1),
+    likelyStrategy: z.string().min(1),
+    familyPattern: z.string().min(1),
+    recommendedTechniques: z.array(SpeciesResearchTechniqueDraftSchema).min(1).max(5),
+    protocolGaps: z.array(z.string().min(1)).min(1).max(8),
+    nextTrialDesign: z.string().min(1),
+    caveats: z.array(z.string().min(1)).min(1).max(6),
+    evidenceNotes: z.array(z.string().min(1)).min(1).max(5)
   })
   .strict();
 
@@ -86,29 +141,71 @@ const SPECIES_INSIGHT_JSON_SCHEMA = {
         type: "object",
         additionalProperties: false,
         properties: {
-          species: { type: "string" },
-          summary: { type: "string" },
-          propagationInterpretation: { type: "string" },
+          species: { type: "string", minLength: 1 },
+          plantFamily: { type: "string", minLength: 1 },
+          familySource: { type: "string", enum: ["workbook", "ai_inferred", "unknown"] },
+          summary: { type: "string", minLength: 1 },
+          propagationInterpretation: { type: "string", minLength: 1 },
+          recommendedTechniques: {
+            type: "array",
+            minItems: 1,
+            maxItems: 4,
+            items: {
+              type: "object",
+              additionalProperties: false,
+              properties: {
+                technique: { type: "string", minLength: 1 },
+                evidenceSummary: { type: "string", minLength: 1 },
+                deterministicConfidence: {
+                  type: "string",
+                  enum: ["Strong signal", "Promising", "Inconclusive", "Needs replication"]
+                },
+                citedRows: {
+                  type: "array",
+                  minItems: 1,
+                  maxItems: 8,
+                  items: { type: "integer", minimum: 1 }
+                },
+                wouldProve: { type: "string", minLength: 1 },
+                wouldDisprove: { type: "string", minLength: 1 }
+              },
+              required: [
+                "technique",
+                "evidenceSummary",
+                "deterministicConfidence",
+                "citedRows",
+                "wouldProve",
+                "wouldDisprove"
+              ]
+            }
+          },
+          familyPropagationPattern: { type: "string", minLength: 1 },
           keyFindings: {
             type: "array",
             minItems: 1,
             maxItems: 4,
-            items: { type: "string" }
+            items: { type: "string", minLength: 1 }
           },
           nextSteps: {
             type: "array",
             minItems: 1,
             maxItems: 4,
-            items: { type: "string" }
+            items: { type: "string", minLength: 1 }
           },
-          trialDesign: { type: "string" },
+          trialDesign: { type: "string", minLength: 1 },
           cautionFlags: {
             type: "array",
             minItems: 1,
             maxItems: 4,
-            items: { type: "string" }
+            items: { type: "string", minLength: 1 }
           },
-          confidenceCaveat: { type: "string" },
+          confidenceCaveat: { type: "string", minLength: 1 },
+          researchNotes: {
+            type: "array",
+            minItems: 1,
+            maxItems: 4,
+            items: { type: "string", minLength: 1 }
+          },
           evidence: {
             type: "array",
             minItems: 1,
@@ -117,10 +214,10 @@ const SPECIES_INSIGHT_JSON_SCHEMA = {
               type: "object",
               additionalProperties: false,
               properties: {
-                sourceRow: { type: "integer" },
-                accession: { type: "string" },
-                treatment: { type: "string" },
-                observation: { type: "string" }
+                sourceRow: { type: "integer", minimum: 1 },
+                accession: { type: "string", minLength: 1 },
+                treatment: { type: "string", minLength: 1 },
+                observation: { type: "string", minLength: 1 }
               },
               required: ["sourceRow", "accession", "treatment", "observation"]
             }
@@ -128,13 +225,18 @@ const SPECIES_INSIGHT_JSON_SCHEMA = {
         },
         required: [
           "species",
+          "plantFamily",
+          "familySource",
           "summary",
           "propagationInterpretation",
+          "recommendedTechniques",
+          "familyPropagationPattern",
           "keyFindings",
           "nextSteps",
           "trialDesign",
           "cautionFlags",
           "confidenceCaveat",
+          "researchNotes",
           "evidence"
         ]
       }
@@ -163,6 +265,102 @@ const ASK_ANSWER_JSON_SCHEMA = {
   required: ["answer", "caveats", "citedRows"]
 };
 
+const SPECIES_RESEARCH_JSON_SCHEMA = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    plantFamily: { type: "string", minLength: 1 },
+    familySource: { type: "string", enum: ["workbook", "ai_inferred", "unknown"] },
+    summary: { type: "string", minLength: 1 },
+    likelyStrategy: { type: "string", minLength: 1 },
+    familyPattern: { type: "string", minLength: 1 },
+    recommendedTechniques: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          technique: { type: "string", minLength: 1 },
+          evidenceLevel: {
+            type: "string",
+            enum: ["local_species", "species_literature", "genus_background", "family_background", "mixed"]
+          },
+          recommendation: { type: "string", minLength: 1 },
+          evidenceSummary: { type: "string", minLength: 1 },
+          deterministicConfidence: {
+            type: "string",
+            enum: ["Strong signal", "Promising", "Inconclusive", "Needs replication"]
+          },
+          sourceIds: {
+            type: "array",
+            maxItems: 8,
+            items: { type: "string", minLength: 1 }
+          },
+          localRows: {
+            type: "array",
+            maxItems: 8,
+            items: { type: "integer", minimum: 1 }
+          },
+          protocolFrame: { type: "string", minLength: 1 },
+          experimentalControls: { type: "string", minLength: 1 },
+          successCriteria: { type: "string", minLength: 1 },
+          riskChecks: { type: "string", minLength: 1 },
+          whatToTry: { type: "string", minLength: 1 },
+          whatWouldChangeMind: { type: "string", minLength: 1 }
+        },
+        required: [
+          "technique",
+          "evidenceLevel",
+          "recommendation",
+          "evidenceSummary",
+          "deterministicConfidence",
+          "sourceIds",
+          "localRows",
+          "protocolFrame",
+          "experimentalControls",
+          "successCriteria",
+          "riskChecks",
+          "whatToTry",
+          "whatWouldChangeMind"
+        ]
+      }
+    },
+    protocolGaps: {
+      type: "array",
+      minItems: 1,
+      maxItems: 8,
+      items: { type: "string", minLength: 1 }
+    },
+    nextTrialDesign: { type: "string", minLength: 1 },
+    caveats: {
+      type: "array",
+      minItems: 1,
+      maxItems: 6,
+      items: { type: "string", minLength: 1 }
+    },
+    evidenceNotes: {
+      type: "array",
+      minItems: 1,
+      maxItems: 5,
+      items: { type: "string", minLength: 1 }
+    }
+  },
+  required: [
+    "plantFamily",
+    "familySource",
+    "summary",
+    "likelyStrategy",
+    "familyPattern",
+    "recommendedTechniques",
+    "protocolGaps",
+    "nextTrialDesign",
+    "caveats",
+    "evidenceNotes"
+  ]
+};
+
 const HEADER_MAPPING_JSON_SCHEMA = {
   type: "object",
   additionalProperties: false,
@@ -186,12 +384,15 @@ const HEADER_MAPPING_JSON_SCHEMA = {
 
 interface SpeciesContext {
   species: string;
+  family: string | null;
   deterministicConfidence: ConfidenceLabel;
   trials: Array<{
     sourceRow: number;
     accession: string;
     sourceAccession: string;
+    family: string | null;
     treatment: string;
+    treatmentComponents: TrialRecord["treatmentComponents"];
     pc: number | null;
     lpc: number | null;
     fourPc: number | null;
@@ -220,6 +421,10 @@ function confidenceRank(label: ConfidenceLabel): number {
   }
 }
 
+function capConfidence(label: ConfidenceLabel, ceiling: ConfidenceLabel): ConfidenceLabel {
+  return confidenceRank(label) > confidenceRank(ceiling) ? ceiling : label;
+}
+
 const CONFIDENCE_LABELS: ConfidenceLabel[] = ["Strong signal", "Promising", "Inconclusive", "Needs replication"];
 
 function confidenceLabelsInText(text: string): ConfidenceLabel[] {
@@ -231,15 +436,85 @@ function confidenceLabelsInText(text: string): ConfidenceLabel[] {
   return found;
 }
 
+function negatesConfidenceLabel(text: string, label: ConfidenceLabel): boolean {
+  const expression = new RegExp(`\\b${label.replace(/\s+/g, "\\s+")}\\b`, "gi");
+  let match: RegExpExecArray | null;
+  while ((match = expression.exec(text)) !== null) {
+    if (!isConfidenceLabelOccurrenceNegated(text, match.index)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function isConfidenceLabelOccurrenceNegated(text: string, index: number): boolean {
+  const sentenceStart = Math.max(
+    text.lastIndexOf(".", index - 1),
+    text.lastIndexOf(";", index - 1),
+    text.lastIndexOf("!", index - 1),
+    text.lastIndexOf("?", index - 1),
+    text.lastIndexOf("\n", index - 1),
+    text.lastIndexOf("\r", index - 1)
+  );
+  const before = text.slice(sentenceStart + 1, index).toLowerCase();
+  return /\b(no|not|without|lack(?:s|ing)?|insufficient|underpowered|did not find|do not treat as)\b/.test(before);
+}
+
 function assertNoConfidenceUpgrade(textParts: string[], ceiling: ConfidenceLabel, source: string): void {
   const ceilingRank = confidenceRank(ceiling);
   for (const text of textParts) {
     for (const label of confidenceLabelsInText(text)) {
-      if (confidenceRank(label) > ceilingRank) {
+      if (confidenceRank(label) > ceilingRank && !negatesConfidenceLabel(text, label)) {
         throw new Error(`${source} attempted to upgrade deterministic confidence from ${ceiling} to ${label}.`);
       }
     }
   }
+}
+
+function sanitizeConfidenceLanguage(text: string, ceiling: ConfidenceLabel): string {
+  let sanitized = text;
+  for (const [index, label] of CONFIDENCE_LABELS.entries()) {
+    if (confidenceRank(label) <= confidenceRank(ceiling)) continue;
+    const labelPattern = label.replace(/\s+/g, "\\s+");
+    const marker = `__CONFIDENCE_DOWNGRADE_${index}__`;
+    sanitized = sanitized.replace(new RegExp(`\\b(?:a|an)\\s+${labelPattern}\\b`, "gi"), (match, offset: number) =>
+      isConfidenceLabelOccurrenceNegated(sanitized, offset) ? match : marker
+    );
+    sanitized = sanitized.replace(new RegExp(`\\b${labelPattern}\\b`, "gi"), (match, offset: number) =>
+      isConfidenceLabelOccurrenceNegated(sanitized, offset) ? match : `not yet ${label}`
+    );
+    sanitized = sanitized.split(marker).join(`not yet a ${label}`);
+  }
+  return sanitized;
+}
+
+function sanitizeResearchNarrative(
+  parsed: z.infer<typeof SpeciesResearchResponseSchema>,
+  ceiling: ConfidenceLabel
+): z.infer<typeof SpeciesResearchResponseSchema> {
+  return {
+    ...parsed,
+    plantFamily: sanitizeConfidenceLanguage(parsed.plantFamily, ceiling),
+    summary: sanitizeConfidenceLanguage(parsed.summary, ceiling),
+    likelyStrategy: sanitizeConfidenceLanguage(parsed.likelyStrategy, ceiling),
+    familyPattern: sanitizeConfidenceLanguage(parsed.familyPattern, ceiling),
+    protocolGaps: parsed.protocolGaps.map((gap) => sanitizeConfidenceLanguage(gap, ceiling)),
+    nextTrialDesign: sanitizeConfidenceLanguage(parsed.nextTrialDesign, ceiling),
+    caveats: parsed.caveats.map((caveat) => sanitizeConfidenceLanguage(caveat, ceiling)),
+    evidenceNotes: parsed.evidenceNotes.map((note) => sanitizeConfidenceLanguage(note, ceiling)),
+    recommendedTechniques: parsed.recommendedTechniques.map((recommendation) => ({
+      ...recommendation,
+      technique: sanitizeConfidenceLanguage(recommendation.technique, ceiling),
+      recommendation: sanitizeConfidenceLanguage(recommendation.recommendation, ceiling),
+      evidenceSummary: sanitizeConfidenceLanguage(recommendation.evidenceSummary, ceiling),
+      protocolFrame: sanitizeConfidenceLanguage(recommendation.protocolFrame, ceiling),
+      experimentalControls: sanitizeConfidenceLanguage(recommendation.experimentalControls, ceiling),
+      successCriteria: sanitizeConfidenceLanguage(recommendation.successCriteria, ceiling),
+      riskChecks: sanitizeConfidenceLanguage(recommendation.riskChecks, ceiling),
+      whatToTry: sanitizeConfidenceLanguage(recommendation.whatToTry, ceiling),
+      whatWouldChangeMind: sanitizeConfidenceLanguage(recommendation.whatWouldChangeMind, ceiling)
+    }))
+  };
 }
 
 function highestConfidenceLabel(labels: ConfidenceLabel[]): ConfidenceLabel {
@@ -275,6 +550,13 @@ function maxConfidenceFromContext(value: unknown): ConfidenceLabel {
 
   visit(value);
   return labels.length ? highestConfidenceLabel(labels) : "Inconclusive";
+}
+
+function normalizePlantFamilyName(value: string | null | undefined): string | null {
+  const trimmed = value?.trim();
+  if (!trimmed || /^unknown$/i.test(trimmed)) return null;
+  const familyMatch = trimmed.match(/\b[A-Z][a-z]+aceae\b/);
+  return familyMatch?.[0] ?? trimmed;
 }
 
 function deterministicSpeciesConfidence(trials: TrialRecord[]): ConfidenceLabel {
@@ -339,6 +621,230 @@ function hydrateEvidence(context: SpeciesContext, draftEvidence: z.infer<typeof 
   return evidence;
 }
 
+function normalizeFamily(context: SpeciesContext, draft: z.infer<typeof SpeciesInsightDraftSchema>): {
+  plantFamily: string;
+  familySource: FamilySource;
+} {
+  const contextFamily = normalizePlantFamilyName(context.family);
+  if (contextFamily) return { plantFamily: contextFamily, familySource: "workbook" };
+  const family = normalizePlantFamilyName(draft.plantFamily);
+  if (!family || draft.familySource === "unknown") {
+    return { plantFamily: "Unknown", familySource: "unknown" };
+  }
+  return { plantFamily: family, familySource: "ai_inferred" };
+}
+
+function fallbackTechniqueRecommendation(
+  context: SpeciesContext,
+  evidence: SpeciesInsightEvidence[]
+): RecommendedTechnique {
+  const bestTrial =
+    context.trials
+      .slice()
+      .filter((trial) => typeof trial.pc === "number")
+      .sort((a, b) => (b.pc ?? -1) - (a.pc ?? -1))[0] ?? context.trials[0];
+  const citedRows = bestTrial ? [bestTrial.sourceRow] : evidence.map((item) => item.sourceRow).slice(0, 1);
+
+  return {
+    technique: bestTrial?.treatment ?? "Paired control and candidate treatment",
+    evidenceSummary: bestTrial
+      ? `Local row ${bestTrial.sourceRow} is the best available cited lead, but it still needs replication.`
+      : "No treatment can be recommended until the import contains species-level trial rows.",
+    deterministicConfidence: context.deterministicConfidence,
+    citedRows,
+    wouldProve: "Repeated paired accessions show the same direction while downstream survival remains acceptable.",
+    wouldDisprove: "Control or alternative trays match or beat the candidate after replication, or survival drops after germination."
+  };
+}
+
+function hydrateRecommendedTechniques(
+  context: SpeciesContext,
+  draftRecommendations: Array<z.infer<typeof RecommendedTechniqueDraftSchema>>,
+  evidence: SpeciesInsightEvidence[]
+): RecommendedTechnique[] {
+  const allowedRows = new Set(context.trials.map((trial) => trial.sourceRow));
+  const recommendations: RecommendedTechnique[] = [];
+
+  for (const recommendation of draftRecommendations) {
+    const deterministicConfidence = capConfidence(
+      recommendation.deterministicConfidence,
+      context.deterministicConfidence
+    );
+    const citedRows = [...new Set(recommendation.citedRows.filter((row) => allowedRows.has(row)))];
+    if (!citedRows.length) continue;
+    recommendations.push({
+      technique: recommendation.technique,
+      evidenceSummary: recommendation.evidenceSummary,
+      deterministicConfidence,
+      citedRows,
+      wouldProve: recommendation.wouldProve,
+      wouldDisprove: recommendation.wouldDisprove
+    });
+  }
+
+  return recommendations.length ? recommendations : [fallbackTechniqueRecommendation(context, evidence)];
+}
+
+function contextForSpecies(importResult: ImportResult, species: string): SpeciesContext | null {
+  return buildSpeciesInsightContexts(importResult).find((context) => context.species === species) ?? null;
+}
+
+function researchFamily(
+  context: SpeciesContext,
+  taxonomy: SpeciesTaxonomyMatch | null,
+  draft?: z.infer<typeof SpeciesResearchResponseSchema>
+): { plantFamily: string | null; familySource: FamilySource } {
+  const contextFamily = normalizePlantFamilyName(context.family);
+  if (contextFamily) return { plantFamily: contextFamily, familySource: "workbook" };
+  const taxonomyFamily = normalizePlantFamilyName(taxonomy?.family);
+  if (taxonomyFamily) return { plantFamily: taxonomyFamily, familySource: "ai_inferred" };
+  const draftFamily = normalizePlantFamilyName(draft?.plantFamily);
+  if (draftFamily && draft?.familySource !== "unknown") {
+    return { plantFamily: draftFamily, familySource: "ai_inferred" };
+  }
+  return { plantFamily: null, familySource: "unknown" };
+}
+
+function localEvidenceForResearch(context: SpeciesContext): SpeciesInsightEvidence[] {
+  return fallbackEvidence(context).slice(0, 5);
+}
+
+function noSourceResearchResult({
+  species,
+  context,
+  taxonomy,
+  generatedAt,
+  reason,
+  sources = [],
+  model = null
+}: {
+  species: string;
+  context: SpeciesContext;
+  taxonomy: SpeciesTaxonomyMatch | null;
+  generatedAt: string;
+  reason?: string;
+  sources?: SpeciesResearchSource[];
+  model?: string | null;
+}): SpeciesResearchResult {
+  const family = researchFamily(context, taxonomy);
+  const sourceReason =
+    reason ??
+    "OpenAI could not produce a valid local-evidence germination assessment. The app is withholding protocol advice rather than inventing it.";
+  return {
+    species,
+    status: "no_sources",
+    plantFamily: family.plantFamily,
+    familySource: family.familySource,
+    deterministicConfidence: context.deterministicConfidence,
+    summary: sourceReason,
+    likelyStrategy:
+      "Use the local workbook evidence only as a trial-planning clue before treating any method as a protocol.",
+    familyPattern:
+      family.plantFamily === null
+        ? "Family context is unresolved for this taxon."
+        : `${family.plantFamily} context was identified, but the workbook evidence still owns the treatment assessment.`,
+    recommendedTechniques: [],
+    protocolGaps: [
+      "No external literature service is used in this app path.",
+      "Treat local workbook treatment codes as local protocols unless the codebook defines temperature, duration, substrate, moisture, and light conditions."
+    ],
+    nextTrialDesign:
+      "Repeat the best local candidate against a control across multiple accessions, and record PC plus liner or 4-inch survival before changing production practice.",
+    caveats: [
+      "Technique claims must be grounded in local workbook rows.",
+      "Deterministic confidence labels remain authoritative.",
+      "Missing reference context is not evidence that a treatment will fail."
+    ],
+    evidenceNotes: [sourceReason],
+    localEvidence: localEvidenceForResearch(context),
+    sources,
+    generatedAt,
+    model
+  };
+}
+
+function localResearchPayload(importResult: ImportResult, context: SpeciesContext, taxonomy: SpeciesTaxonomyMatch | null) {
+  const rowSet = new Set(context.trials.map((trial) => trial.sourceRow));
+  const family = context.family ?? taxonomy?.family ?? null;
+  const normalizedFamily = normalizePlantFamilyName(family)?.toLowerCase() ?? null;
+  const genus = taxonomy?.genus ?? context.species.split(/\s+/)[0] ?? null;
+  const relatedTrials = importResult.trials
+    .filter((trial) => {
+      if (rowSet.has(trial.sourceRow)) return false;
+      if (normalizedFamily && normalizePlantFamilyName(trial.family)?.toLowerCase() === normalizedFamily) return true;
+      return genus ? trial.species.startsWith(`${genus} `) : false;
+    })
+    .sort((a, b) => a.sourceRow - b.sourceRow)
+    .slice(0, 12)
+    .map((trial) => ({
+      sourceRow: trial.sourceRow,
+      species: trial.species,
+      family: trial.family ?? null,
+      treatment: trial.treatment,
+      treatmentComponents: trial.treatmentComponents,
+      pc: trial.pc,
+      lpc: trial.lpc,
+      fourPc: trial.fourPc,
+      status: trial.status
+    }));
+
+  return {
+    species: context.species,
+    deterministicConfidence: context.deterministicConfidence,
+    selectedTrials: context.trials,
+    observations: context.observations,
+    relatedFamilyOrGenusTrials: relatedTrials
+  };
+}
+
+function hydrateResearchTechniques(
+  context: SpeciesContext,
+  sources: SpeciesResearchSource[],
+  draftRecommendations: Array<z.infer<typeof SpeciesResearchTechniqueDraftSchema>>
+): SpeciesResearchTechnique[] {
+  const allowedSourceIds = new Set(sources.map((source) => source.id));
+  const allowedRows = new Set(context.trials.map((trial) => trial.sourceRow));
+  const techniques: SpeciesResearchTechnique[] = [];
+
+  for (const recommendation of draftRecommendations) {
+    const deterministicConfidence = capConfidence(
+      recommendation.deterministicConfidence,
+      context.deterministicConfidence
+    );
+    const localRows = [...new Set(recommendation.localRows.filter((row) => allowedRows.has(row)))];
+    const sourceIds = [...new Set(recommendation.sourceIds.filter((sourceId) => allowedSourceIds.has(sourceId)))];
+    const evidenceLevel =
+      !sourceIds.length && localRows.length && recommendation.evidenceLevel !== "local_species"
+        ? "local_species"
+        : recommendation.evidenceLevel;
+    if (evidenceLevel === "local_species" && !localRows.length) continue;
+    if (evidenceLevel === "mixed" && (!localRows.length || !sourceIds.length)) continue;
+    if (
+      ["species_literature", "genus_background", "family_background"].includes(evidenceLevel) &&
+      !sourceIds.length
+    ) {
+      continue;
+    }
+    techniques.push({
+      technique: recommendation.technique,
+      evidenceLevel,
+      recommendation: recommendation.recommendation,
+      evidenceSummary: recommendation.evidenceSummary,
+      deterministicConfidence,
+      sourceIds,
+      localRows,
+      protocolFrame: recommendation.protocolFrame,
+      experimentalControls: recommendation.experimentalControls,
+      successCriteria: recommendation.successCriteria,
+      riskChecks: recommendation.riskChecks,
+      whatToTry: recommendation.whatToTry,
+      whatWouldChangeMind: recommendation.whatWouldChangeMind
+    });
+  }
+
+  return techniques;
+}
+
 export function buildSpeciesInsightContexts(result: ImportResult): SpeciesContext[] {
   const observationsByTrial = new Map<string, ParsedObservation[]>();
   for (const observation of result.observations) {
@@ -354,35 +860,41 @@ export function buildSpeciesInsightContexts(result: ImportResult): SpeciesContex
   }
 
   return [...bySpecies.entries()]
-    .map(([species, trials]) => ({
-      species,
-      deterministicConfidence: deterministicSpeciesConfidence(trials),
-      trials: trials
-        .slice()
-        .sort((a, b) => a.sourceRow - b.sourceRow)
-        .slice(0, 14)
-        .map((trial) => ({
-          sourceRow: trial.sourceRow,
-          accession: trial.pAccession,
-          sourceAccession: trial.sourceAccession,
-          treatment: trial.treatment,
-          pc: trial.pc,
-          lpc: trial.lpc,
-          fourPc: trial.fourPc,
-          status: trial.status,
-          notes: trial.notes
-        })),
-      observations: trials
-        .flatMap((trial) => observationsByTrial.get(trial.id) ?? [])
-        .slice(0, 8)
-        .map((observation) => ({
-          sourceRow: observation.sourceRow,
-          kind: observation.kind,
-          value: observation.value,
-          date: observation.date,
-          rawSnippet: observation.rawSnippet
-        }))
-    }))
+    .map(([species, trials]) => {
+      const family = trials.find((trial) => trial.family)?.family ?? null;
+      return {
+        species,
+        family,
+        deterministicConfidence: deterministicSpeciesConfidence(trials),
+        trials: trials
+          .slice()
+          .sort((a, b) => a.sourceRow - b.sourceRow)
+          .slice(0, 14)
+          .map((trial) => ({
+            sourceRow: trial.sourceRow,
+            accession: trial.pAccession,
+            sourceAccession: trial.sourceAccession,
+            family: trial.family ?? null,
+            treatment: trial.treatment,
+            treatmentComponents: trial.treatmentComponents,
+            pc: trial.pc,
+            lpc: trial.lpc,
+            fourPc: trial.fourPc,
+            status: trial.status,
+            notes: trial.notes
+          })),
+        observations: trials
+          .flatMap((trial) => observationsByTrial.get(trial.id) ?? [])
+          .slice(0, 8)
+          .map((observation) => ({
+            sourceRow: observation.sourceRow,
+            kind: observation.kind,
+            value: observation.value,
+            date: observation.date,
+            rawSnippet: observation.rawSnippet
+          }))
+      };
+    })
     .sort(
       (a, b) =>
         confidenceRank(b.deterministicConfidence) - confidenceRank(a.deterministicConfidence) ||
@@ -406,28 +918,48 @@ export function parseSpeciesInsightResponse(
     if (!context) continue;
     assertNoConfidenceUpgrade(
       [
+        draft.plantFamily,
         draft.summary,
         draft.propagationInterpretation,
+        draft.familyPropagationPattern,
         ...draft.keyFindings,
         ...draft.nextSteps,
         draft.trialDesign,
         ...draft.cautionFlags,
-        draft.confidenceCaveat
+        draft.confidenceCaveat,
+        ...draft.researchNotes,
+        ...draft.recommendedTechniques.flatMap((recommendation) => [
+          recommendation.technique,
+          recommendation.evidenceSummary,
+          recommendation.wouldProve,
+          recommendation.wouldDisprove
+        ])
       ],
       context.deterministicConfidence,
       `Species insight for ${context.species}`
     );
     const evidence = hydrateEvidence(context, draft.evidence);
+    const normalizedFamily = normalizeFamily(context, draft);
+    const recommendedTechniques = hydrateRecommendedTechniques(
+      context,
+      draft.recommendedTechniques,
+      evidence.length ? evidence : fallbackEvidence(context)
+    );
     insights.push({
       species: context.species,
       deterministicConfidence: context.deterministicConfidence,
+      plantFamily: normalizedFamily.plantFamily,
+      familySource: normalizedFamily.familySource,
       summary: draft.summary,
       propagationInterpretation: draft.propagationInterpretation,
+      recommendedTechniques,
+      familyPropagationPattern: draft.familyPropagationPattern,
       keyFindings: draft.keyFindings,
       nextSteps: draft.nextSteps,
       trialDesign: draft.trialDesign,
       cautionFlags: draft.cautionFlags,
       confidenceCaveat: draft.confidenceCaveat,
+      researchNotes: draft.researchNotes,
       evidence: evidence.length ? evidence : fallbackEvidence(context),
       generatedBy: "openai",
       model,
@@ -436,6 +968,88 @@ export function parseSpeciesInsightResponse(
   }
 
   return insights;
+}
+
+export function parseSpeciesResearchResponse({
+  responseText,
+  species,
+  context,
+  taxonomy,
+  sources,
+  model = OPENAI_INSIGHT_MODEL,
+  generatedAt = new Date().toISOString()
+}: {
+  responseText: string;
+  species: string;
+  context: SpeciesContext;
+  taxonomy: SpeciesTaxonomyMatch | null;
+  sources: SpeciesResearchSource[];
+  model?: string;
+  generatedAt?: string;
+}): SpeciesResearchResult {
+  const parsed = sanitizeResearchNarrative(
+    SpeciesResearchResponseSchema.parse(JSON.parse(responseText)),
+    context.deterministicConfidence
+  );
+  assertNoConfidenceUpgrade(
+    [
+      parsed.plantFamily,
+      parsed.summary,
+      parsed.likelyStrategy,
+      parsed.familyPattern,
+      parsed.nextTrialDesign,
+      ...parsed.protocolGaps,
+      ...parsed.caveats,
+      ...parsed.evidenceNotes,
+      ...parsed.recommendedTechniques.flatMap((recommendation) => [
+        recommendation.technique,
+        recommendation.evidenceLevel,
+        recommendation.recommendation,
+        recommendation.evidenceSummary,
+        recommendation.protocolFrame,
+        recommendation.experimentalControls,
+        recommendation.successCriteria,
+        recommendation.riskChecks,
+        recommendation.whatToTry,
+        recommendation.whatWouldChangeMind
+      ])
+    ],
+    context.deterministicConfidence,
+    `Species research for ${context.species}`
+  );
+  const family = researchFamily(context, taxonomy, parsed);
+  const recommendedTechniques = hydrateResearchTechniques(context, sources, parsed.recommendedTechniques);
+  if (!recommendedTechniques.length) {
+    return noSourceResearchResult({
+      species,
+      context,
+      taxonomy,
+      generatedAt,
+      sources,
+      model,
+      reason: "No valid local-row germination technique survived validation, so the AI narrative was withheld."
+    });
+  }
+
+  return {
+    species,
+    status: "ready",
+    plantFamily: family.plantFamily,
+    familySource: family.familySource,
+    deterministicConfidence: context.deterministicConfidence,
+    summary: parsed.summary,
+    likelyStrategy: parsed.likelyStrategy,
+    familyPattern: parsed.familyPattern,
+    recommendedTechniques,
+    protocolGaps: parsed.protocolGaps,
+    nextTrialDesign: parsed.nextTrialDesign,
+    caveats: parsed.caveats,
+    evidenceNotes: parsed.evidenceNotes,
+    localEvidence: localEvidenceForResearch(context),
+    sources,
+    generatedAt,
+    model
+  };
 }
 
 export function parseAskAnswerResponse(
@@ -484,7 +1098,7 @@ export async function generateSpeciesInsights({
   const response = await client.responses.create({
     model: OPENAI_INSIGHT_MODEL,
     instructions:
-      "You are a botanist and seed-bank scientist with decades of propagation experience. Interpret the provided PSU-style propagation evidence for each species. Produce species-specific propagation interpretation: likely dormancy/handling hypothesis from the submitted rows, what method looks worth repeating, what evidence is missing, and a practical next-trial design. Do not change deterministic confidence labels, do not overstate underpowered findings, and cite only source rows present in the payload. Do not provide URLs; the app attaches vetted reference links separately.",
+      "You are a botanist and seed-bank scientist with decades of propagation experience. Interpret the provided PSU-style propagation evidence for each species as an evidence-backed species and family propagation assessment. For each species, identify the plant family from the workbook family field when present; otherwise infer it cautiously from the taxon and mark familySource as ai_inferred, or unknown when uncertain. Recommend germination techniques only when you cite source rows present in that species payload. Explain what the cited rows suggest, what family-level germination or dormancy pattern may be relevant, what would prove or disprove the technique, and the next practical trial design. Preserve deterministic confidence labels exactly, do not overstate underpowered findings, and never hide data-quality warnings. Do not provide URLs; the app attaches vetted reference links separately.",
     input: JSON.stringify({
       batch: dashboard.batch,
       guardrails: dashboard.dataQualityIssues,
@@ -505,6 +1119,102 @@ export async function generateSpeciesInsights({
   });
 
   return parseSpeciesInsightResponse(response.output_text, contexts, OPENAI_INSIGHT_MODEL, generatedAt);
+}
+
+export async function generateSpeciesResearch({
+  apiKey,
+  species,
+  importResult,
+  dashboard,
+  taxonomy,
+  sources
+}: {
+  apiKey: string;
+  species: string;
+  importResult: ImportResult;
+  dashboard: DashboardData;
+  taxonomy: SpeciesTaxonomyMatch | null;
+  sources: SpeciesResearchSource[];
+}): Promise<SpeciesResearchResult> {
+  const context = contextForSpecies(importResult, species);
+  if (!context) throw new Error(`No local trial rows found for ${species}.`);
+  const generatedAt = new Date().toISOString();
+
+  const client = new OpenAI({ apiKey });
+  const instructions =
+    "You are a senior seed-bank propagation scientist advising researchers who need to get difficult native seeds to germinate faster without overclaiming. Produce a protocol-oriented research assessment for the selected species using the provided local workbook evidence and taxonomy context. Good output helps design the next experiment: it separates germination from seedling/production success, names the exact workbook treatment code being evaluated, and states controls, replication needs, success criteria, failure criteria, and risk checks such as viability/fill, contamination, abnormal seedlings, unequal seed numbers, incomplete ND outcomes, and rescue/converted treatments. Do not invent operational details. If CS, WS, GA, smoke, substrate, light, temperature, moisture, or duration are not defined in the payload, say to repeat the local code exactly and list the missing protocol fields as protocolGaps. Recommendations must be based on local_species evidence and cite localRows from the selected species payload; sourceIds should be empty unless sources are explicitly provided. Do not present general family or genus knowledge as a verified protocol. You may use family/taxonomy context only to frame hypotheses and caveats, while keeping treatment recommendations grounded in the workbook rows. Preserve deterministic confidence labels exactly; never upgrade them and never hide caveats. Always produce useful local_species technique candidates from the workbook rows unless the local workbook evidence itself is unusable.";
+  const input = JSON.stringify({
+    batch: dashboard.batch,
+    dataQualityIssues: dashboard.dataQualityIssues,
+    taxonomy,
+    localEvidence: localResearchPayload(importResult, context, taxonomy),
+    manualSources: sources
+  });
+  const attempts = [
+    { maxOutputTokens: 7000, instructions },
+    {
+      maxOutputTokens: 9000,
+      instructions: `${instructions} Retry requirement: return concise, complete JSON. Keep the assessment practical; prefer two or three high-value local_species techniques over exhaustive wording.`
+    }
+  ];
+  let lastError: unknown = null;
+
+  for (const attempt of attempts) {
+    try {
+      const response = await client.responses.create({
+        model: OPENAI_INSIGHT_MODEL,
+        instructions: attempt.instructions,
+        input,
+        reasoning: { effort: "medium" },
+        max_output_tokens: attempt.maxOutputTokens,
+        store: false,
+        text: {
+          format: {
+            type: "json_schema",
+            name: "seedbank_species_research",
+            description: "Local workbook germination research assessment for one selected species.",
+            strict: true,
+            schema: SPECIES_RESEARCH_JSON_SCHEMA
+          }
+        }
+      });
+
+      const result = parseSpeciesResearchResponse({
+        responseText: response.output_text,
+        species,
+        context,
+        taxonomy,
+        sources,
+        model: OPENAI_INSIGHT_MODEL,
+        generatedAt
+      });
+      if (result.status === "ready") return result;
+      throw new Error("No valid local-species row-cited techniques generated on this attempt.");
+    } catch (error) {
+      lastError = error;
+      console.warn(
+        `OpenAI species research synthesis attempt failed: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+
+  if (lastError) {
+    console.warn(
+      `OpenAI species research synthesis failed validation after retry: ${
+        lastError instanceof Error ? lastError.message : String(lastError)
+      }`
+    );
+  }
+  return noSourceResearchResult({
+    species,
+    context,
+    taxonomy,
+    generatedAt,
+    sources,
+    model: null,
+    reason:
+      "OpenAI synthesis did not return a valid local-row assessment, so the app is showing local evidence without generated technique advice."
+  });
 }
 
 export async function answerSpreadsheetQuestion({
