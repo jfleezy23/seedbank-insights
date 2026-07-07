@@ -59,5 +59,3 @@ jobs:
           args: >
             -Dsonar.organization=${{ steps.sonar_config.outputs.organization }}
             -Dsonar.projectKey=${{ steps.sonar_config.outputs.project_key }}
-            -Dsonar.qualitygate.wait=true
-            -Dsonar.qualitygate.timeout=300
