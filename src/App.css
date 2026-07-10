@@ -408,6 +408,7 @@ button:disabled {
 .ai-state {
   display: inline-flex;
   align-items: center;
+  justify-content: center;
   gap: 6px;
   white-space: nowrap;
   min-height: 26px;
@@ -537,6 +538,19 @@ button:disabled {
   min-height: 328px;
 }
 
+.evidence-tier {
+  display: grid;
+  justify-items: end;
+  gap: 4px;
+}
+
+.evidence-tier > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 800;
+  line-height: 1.2;
+}
+
 .native-chart {
   display: grid;
   gap: 12px;
@@ -546,7 +560,7 @@ button:disabled {
 
 .native-chart-row {
   display: grid;
-  grid-template-columns: 74px minmax(0, 1fr) 28px;
+  grid-template-columns: minmax(140px, 210px) minmax(120px, 1fr) 28px;
   gap: 8px;
   align-items: center;
 }
@@ -559,9 +573,9 @@ button:disabled {
 }
 
 .native-chart-row span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+  white-space: normal;
 }
 
 .native-chart-row strong {
@@ -717,6 +731,10 @@ button:disabled {
   border-left-color: var(--yellow);
 }
 
+.quality-action.low {
+  border-left-color: #8a6500;
+}
+
 .quality-action.empty {
   border-left-color: var(--psu-green);
   background: var(--soft);
@@ -736,6 +754,10 @@ button:disabled {
 .quality-action.high .quality-action-topline svg,
 .quality-action.medium .quality-action-topline svg {
   color: var(--danger);
+}
+
+.quality-action.low .quality-action-topline svg {
+  color: #8a6500;
 }
 
 .quality-action strong,
@@ -891,6 +913,41 @@ button:disabled {
   align-items: start;
 }
 
+.species-selector-column {
+  display: grid;
+  gap: 9px;
+  min-width: 0;
+}
+
+.species-filter {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 0 10px;
+  color: var(--muted);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+}
+
+.species-filter:focus-within {
+  border-color: var(--psu-green);
+  box-shadow: 0 0 0 2px rgba(109, 141, 36, 0.16);
+}
+
+.species-filter input {
+  min-width: 0;
+  width: 100%;
+  padding: 0;
+  color: var(--forest);
+  background: transparent;
+  border: 0;
+  outline: 0;
+  font-size: 13px;
+}
+
 .species-selector {
   display: grid;
   gap: 7px;
@@ -931,6 +988,16 @@ button:disabled {
   color: var(--muted);
   font-size: 11px;
   font-weight: 700;
+}
+
+.species-filter-empty {
+  margin: 0;
+  padding: 12px;
+  color: var(--muted);
+  border: 1px dashed var(--line);
+  border-radius: 7px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .species-detail {
@@ -995,11 +1062,13 @@ button:disabled {
   display: grid;
   grid-template-columns: minmax(0, 1.2fr) minmax(280px, 0.8fr);
   gap: 10px;
+  align-items: start;
 }
 
 .species-detail-section {
   display: grid;
   gap: 8px;
+  align-content: start;
   min-width: 0;
   padding: 12px;
   border: 1px solid var(--line);

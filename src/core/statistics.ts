@@ -118,6 +118,7 @@ function bootstrapInterval(values: number[], iterations = 600): [number, number]
 
 function confidenceForComparison(
   n: number,
+  speciesCount: number,
   improved: number,
   worse: number,
   meanDiff: number,
@@ -129,18 +130,24 @@ function confidenceForComparison(
 
   if (n < 3) return "Needs replication";
   if (n < 5 || intervalCrossesZero) return "Inconclusive";
-  if (n >= 10 && directionConsistency >= 0.6 && Math.abs(meanDiff) >= 1 && !intervalCrossesZero) {
+  if (
+    n >= 10 &&
+    speciesCount >= 5 &&
+    directionConsistency >= 0.6 &&
+    Math.abs(meanDiff) >= 1 &&
+    !intervalCrossesZero
+  ) {
     return "Strong signal";
   }
   if (directionConsistency >= 0.6 && Math.abs(meanDiff) >= 0.75) return "Promising";
   return "Inconclusive";
 }
 
-function additionalTrialsNeeded(n: number, confidence: ConfidenceLabel): number {
+function additionalPairsToReviewThreshold(n: number, speciesCount: number, confidence: ConfidenceLabel): number {
   if (confidence === "Strong signal") return 0;
-  if (n < 5) return 5 - n;
-  if (n < 10) return 10 - n;
-  return 3;
+  const pairShortfall = n < 5 ? 5 - n : n < 10 ? 10 - n : 0;
+  const speciesShortfall = Math.max(0, 5 - speciesCount);
+  return Math.max(pairShortfall, speciesShortfall);
 }
 
 function confidenceRank(label: ConfidenceLabel): number {
@@ -210,12 +217,22 @@ export function pairedComparison(
   const worse = diffs.filter((diff) => diff < 0).length;
   const meanDiff = round(mean(diffs) ?? 0, 2);
   const medianDiff = round(median(diffs) ?? 0, 2);
-  const confidence = confidenceForComparison(diffs.length, improved, worse, meanDiff, ciLow, ciHigh);
+  const speciesCount = new Set(examples.map((example) => example.species.trim().toLowerCase())).size;
+  const confidence = confidenceForComparison(
+    diffs.length,
+    speciesCount,
+    improved,
+    worse,
+    meanDiff,
+    ciLow,
+    ciHigh
+  );
 
   return {
     baseline,
     treatment,
     n: diffs.length,
+    speciesCount,
     improved,
     tied,
     worse,
@@ -232,18 +249,51 @@ export function pairedComparison(
       confidence === "Inconclusive" || confidence === "Needs replication"
         ? "Elevated. The treatment may work, but this dataset is underpowered."
         : "Moderate. Continue replication before retiring alternatives.",
-    additionalTrialsNeeded: additionalTrialsNeeded(diffs.length, confidence),
+    additionalTrialsNeeded: additionalPairsToReviewThreshold(diffs.length, speciesCount, confidence),
+    replicationTargetBasis:
+      "Minimum paired rows and species needed for the next evidence-tier review; this is not a statistical power estimate.",
     examples: examples.sort((a, b) => b.diff - a.diff).slice(0, 8)
   };
 }
 
 export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison[] {
-  return [
-    pairedComparison(trials, "C", "CS"),
-    pairedComparison(trials, "CS", "WS+CS"),
-    pairedComparison(trials, "C", "WS30+CS"),
-    pairedComparison(trials, "SCAR+C", "SCAR+CS")
-  ]
+  const treatmentMetadata = new Map<string, { isControl: boolean }>();
+  for (const trial of trials) {
+    treatmentMetadata.set(trial.treatment, { isControl: trial.treatmentComponents.isControl });
+  }
+
+  const order = (left: string, right: string): number => {
+    const priority = (treatment: string) => {
+      if (treatment === "C") return 0;
+      if (treatmentMetadata.get(treatment)?.isControl) return 1;
+      return 2;
+    };
+    return priority(left) - priority(right) || left.localeCompare(right);
+  };
+
+  const treatmentPairs = new Set<string>();
+  const grouped = new Map<string, Set<string>>();
+  for (const trial of trials) {
+    if (!definedScore(trial.pc)) continue;
+    const key = `${trial.pAccession}|||${trial.species.trim().toLowerCase()}`;
+    const treatments = grouped.get(key) ?? new Set<string>();
+    treatments.add(trial.treatment);
+    grouped.set(key, treatments);
+  }
+  for (const treatments of grouped.values()) {
+    const sorted = [...treatments].sort(order);
+    for (let left = 0; left < sorted.length; left += 1) {
+      for (let right = left + 1; right < sorted.length; right += 1) {
+        treatmentPairs.add(`${sorted[left]}\u0000${sorted[right]}`);
+      }
+    }
+  }
+
+  const comparisons = [...treatmentPairs]
+    .map((pair) => {
+      const [baseline, treatment] = pair.split("\u0000");
+      return pairedComparison(trials, baseline, treatment);
+    })
     .filter((comparison) => comparison.n > 0)
     .sort(
       (a, b) =>
@@ -251,14 +301,30 @@ export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison
         b.n - a.n ||
         Math.abs(b.meanDiff) - Math.abs(a.meanDiff)
     );
+  if (comparisons.length <= 1) return comparisons;
+  return comparisons.map((comparison) => ({
+    ...comparison,
+    falsePositiveRisk: `${comparison.falsePositiveRisk} This workbook scan evaluated ${comparisons.length} paired treatment contrasts, so rank and direction should be confirmed rather than read as a corrected significance test.`
+  }));
 }
 
 export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {
-  return trials
+  const rows = trials
     .map((trial) => {
-      const next = trial.ttd ?? trial.linerTtd ?? trial.fourTtd ?? trial.csed ?? trial.wsed ?? trial.startDate;
-      const confidence: ConfidenceLabel =
-        trial.pc !== null && trial.pc >= 4 ? "Promising" : trial.pc === null ? "Needs replication" : "Inconclusive";
+      const recordedDates = [
+        trial.startDate,
+        trial.ced,
+        trial.wsed,
+        trial.csed,
+        trial.ttd,
+        trial.linerStart,
+        trial.linerTtd,
+        trial.fourStart,
+        trial.fourTtd
+      ]
+        .filter((value): value is string => Boolean(value))
+        .sort();
+      const next = recordedDates[recordedDates.length - 1] ?? null;
 
       let priority: TrialQueueItem["priority"] = "low";
       let blockedMetric: TrialQueueItem["blockedMetric"] = "Replication";
@@ -268,12 +334,12 @@ export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {
       if (trial.status === null) {
         priority = "high";
         blockedMetric = "D|ND";
-        nextStep = `Set D/ND status for row ${trial.sourceRow}.`;
+        nextStep = "Set D/ND status for the affected row.";
         reason = "Completion status is needed before this row can be interpreted as active, failed, or settled.";
       } else if (trial.pc === null) {
         priority = trial.status === "D" ? "high" : "medium";
         blockedMetric = "PC";
-        nextStep = `Record PC score for row ${trial.sourceRow}.`;
+        nextStep = "Record a PC score or confirm that the trial remains active.";
         reason =
           trial.status === "D"
             ? "The trial is marked done, but missing PC blocks treatment comparison."
@@ -281,22 +347,22 @@ export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {
       } else if (trial.status === "ND" && trial.pc >= 4) {
         priority = "medium";
         blockedMetric = "D|ND";
-        nextStep = `Resolve ND follow-up for promising row ${trial.sourceRow}.`;
+        nextStep = "Resolve the ND follow-up and record the settled outcome.";
         reason = "High germination on an active row can shift recommendations once completion and survival are known.";
       } else if (trial.pc >= 4 && trial.lpc === null) {
         priority = "medium";
         blockedMetric = "LPC";
-        nextStep = `Record liner survival for row ${trial.sourceRow}.`;
+        nextStep = "Record liner survival for the high-PC germination result.";
         reason = "Good germination is not enough if seedlings fail during liner production.";
       } else if (trial.lpc !== null && trial.lpc >= 4 && trial.fourPc === null) {
         priority = "low";
         blockedMetric = "4PC";
-        nextStep = `Record 4-inch survival for row ${trial.sourceRow}.`;
+        nextStep = "Record 4-inch survival for the successful liner result.";
         reason = "Production follow-through confirms whether a germination win becomes usable plants.";
       } else if (trial.notes || trial.pcd) {
         priority = "low";
         blockedMetric = "Notes";
-        nextStep = `Review notes for row ${trial.sourceRow}.`;
+        nextStep = "Review notes for counts, rescue handling, and protocol detail.";
         reason = "The notes may contain counts, rescue handling, contamination, or timing details that affect interpretation.";
       }
 
@@ -311,11 +377,26 @@ export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {
         reason,
         sourceRows: [trial.sourceRow],
         blockedMetric,
-        pc: trial.pc,
-        confidence
+        pc: trial.pc
       };
     })
-    .filter((item) => item.status !== "D" || item.blockedMetric !== "Replication")
+    .filter((item) => item.status !== "D" || item.blockedMetric !== "Replication");
+
+  const grouped = new Map<string, TrialQueueItem>();
+  for (const item of rows) {
+    const key = [item.species, item.treatment, item.status ?? "", item.blockedMetric, item.nextStep].join("|||");
+    const existing = grouped.get(key);
+    if (!existing) {
+      grouped.set(key, item);
+      continue;
+    }
+    existing.accession = uniqueSorted([...existing.accession.split(", "), item.accession]).join(", ");
+    existing.sourceRows = [...new Set([...existing.sourceRows, ...item.sourceRows])].sort((a, b) => a - b);
+    if ((item.nextDate ?? "") > (existing.nextDate ?? "")) existing.nextDate = item.nextDate;
+    if (existing.pc !== item.pc) existing.pc = null;
+  }
+
+  return [...grouped.values()]
     .sort((a, b) => {
       const priorityOrder = { high: 0, medium: 1, low: 2 };
       return (

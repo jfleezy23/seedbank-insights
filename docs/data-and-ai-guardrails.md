@@ -17,7 +17,7 @@ Ignored local data includes:
 
 ## Score Interpretation
 
-Unless exact extracted counts exist, `PC`, `LPC`, and `4PC` are treated as ordinal 0-5 scores.
+The workbook data dictionary permits `PC`, `LPC`, and `4PC` as either ordinal 0-5 classes or exact 0-100 percentages. The importer preserves each raw value and its detected scale. A valid value above 5 identifies that score column as percentage-based, and the full column is mapped to the documented ordinal classes for cross-row analysis. Columns containing only 0-5 values are treated as ordinal unless future workbook metadata declares another scale. Invalid values below 0 or above 100 are excluded and surfaced as row-level issues.
 
 This means the app should avoid implying precision that the workbook did not provide. Means and differences are useful review signals, but they are not protocol decisions by themselves.
 
@@ -40,6 +40,9 @@ Labels should consider:
 - uneven species mix
 - intervals that cross no effect
 - underpowered comparisons
+- distinct species represented by paired comparisons
+
+Counts shown as "additional pairs" are minimum evidence-tier review thresholds, not formal power estimates.
 
 ## Paired Comparisons
 
@@ -66,6 +69,7 @@ AI species insight output must:
 - keep caveats visible
 - avoid broad protocol recommendations from thin data
 - fail closed if output is malformed
+- use only source URLs returned by the OpenAI web-search discovery call
 
 AI species insight output must not:
 
@@ -74,6 +78,9 @@ AI species insight output must not:
 - hide data-quality warnings
 - invent source rows
 - cite rows outside the bounded context
+- invent or substitute research URLs
+
+Species research uses `gpt-5.4-mini` with low reasoning for bounded web discovery and `gpt-5.4` for structured synthesis. A `gpt-5.5` retry is reserved for malformed synthesis output, not the normal path. Ask and ambiguous-header mapping use `gpt-5.4-mini`.
 
 ## Ask Responses
 

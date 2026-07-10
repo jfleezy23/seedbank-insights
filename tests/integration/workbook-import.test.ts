@@ -60,6 +60,61 @@ describe("committed PSU-style workbook fixture import", () => {
       await rm(dir, { recursive: true, force: true });
     }
   });
+
+  it("preserves raw score scales, normalizes percentages, and excludes invalid scores", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "seedbank-score-scales-"));
+    const generatedPath = path.join(dir, "score-scales.xlsx");
+    try {
+      const workbook = new ExcelJS.Workbook();
+      const sheet = workbook.addWorksheet("P_accessions");
+      sheet.addRow([
+        "P_Accession",
+        "Source_Accession",
+        "Species",
+        "Trt",
+        "Num",
+        "Start",
+        "PT",
+        "TTD",
+        "PC",
+        "LPC",
+        "4PC"
+      ]);
+      sheet.addRow(["P1", "S1", "Species one", "C", 50, "2025-01-02", "s", "2025-03-04", 50, 100, 6]);
+      sheet.addRow(["P2", "S2", "Species two", "CS", 50, "2025-01-02", "s", "2025-03-04", -2, 5, 4]);
+      await workbook.xlsx.writeFile(generatedPath);
+
+      const result = await importWorkbook(generatedPath);
+      expect(result.trials[0]).toMatchObject({
+        pc: 3,
+        pcRaw: 50,
+        pcScale: "percent_0_100",
+        lpc: 5,
+        lpcRaw: 100,
+        lpcScale: "percent_0_100",
+        fourPc: 1,
+        fourPcRaw: 6,
+        fourPcScale: "percent_0_100"
+      });
+      expect(result.trials[1]).toMatchObject({
+        pc: null,
+        pcRaw: -2,
+        pcScale: "invalid",
+        lpc: 1,
+        lpcRaw: 5,
+        lpcScale: "percent_0_100"
+      });
+      expect(result.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: "invalid-pc-score", sourceRows: [3] }),
+          expect.objectContaining({ id: "normalized-pc-percentages", sourceRows: [2] })
+        ])
+      );
+
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
 });
 
 describe.runIf(existsSync(workbookPath))("P_accessions_new.xlsx import", () => {

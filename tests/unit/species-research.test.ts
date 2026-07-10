@@ -393,7 +393,19 @@ describe("species research taxonomy and synthesis", () => {
     expect(fetchCalled).toBe(false);
   });
 
-  it("synthesizes local-species guidance without a second research service", async () => {
+  it("passes discovered web sources into local-species synthesis", async () => {
+    const discoveredSource: SpeciesResearchSource = {
+      id: "openai_web:source-1",
+      source: "openai_web",
+      title: "Phacelia heterophylla germination study",
+      year: 2024,
+      venue: "example.edu",
+      url: "https://example.edu/research/phacelia-heterophylla-germination",
+      doi: null,
+      matchedQuery: "Phacelia heterophylla seed germination",
+      relevance: "species",
+      abstractSnippet: null
+    };
     const synthesized: SpeciesResearchResult = {
       species: "Phacelia heterophylla",
       status: "ready",
@@ -425,9 +437,9 @@ describe("species research taxonomy and synthesis", () => {
       caveats: ["Local-only evidence."],
       evidenceNotes: ["Local workbook evidence remains usable."],
       localEvidence: [],
-      sources: [],
+      sources: [discoveredSource],
       generatedAt: "2026-01-01T00:00:00.000Z",
-      model: "gpt-5.5"
+      model: "gpt-5.4"
     };
     let synthesizerSources: SpeciesResearchSource[] | undefined;
     let fetchCalls = 0;
@@ -464,6 +476,12 @@ describe("species research taxonomy and synthesis", () => {
           family: "Hydrophyllaceae"
         });
       },
+      sourceDiscoverer: async ({ species, taxonomy, family }) => {
+        expect(species).toBe("Phacelia heterophylla");
+        expect(taxonomy?.family).toBe("Hydrophyllaceae");
+        expect(family).toBe("Hydrophyllaceae");
+        return [discoveredSource];
+      },
       synthesizer: async ({ sources }) => {
         synthesizerSources = sources;
         return synthesized;
@@ -471,13 +489,67 @@ describe("species research taxonomy and synthesis", () => {
     });
 
     expect(fetchCalls).toBe(1);
-    expect(synthesizerSources).toEqual([]);
+    expect(synthesizerSources).toEqual([discoveredSource]);
     expect(research.status).toBe("ready");
     expect(research.recommendedTechniques[0]).toMatchObject({
       evidenceLevel: "local_species",
       localRows: [3],
       sourceIds: []
     });
+  });
+
+  it("continues with local synthesis when web discovery fails", async () => {
+    let synthesizerSources: SpeciesResearchSource[] | undefined;
+    const synthesized = {
+      species: "Phacelia heterophylla",
+      status: "ready",
+      plantFamily: null,
+      familySource: "unknown",
+      deterministicConfidence: "Needs replication",
+      summary: "Local evidence remains usable.",
+      likelyStrategy: "Repeat CS against C.",
+      familyPattern: "Unknown.",
+      recommendedTechniques: [],
+      protocolGaps: [],
+      nextTrialDesign: "Run paired trays.",
+      caveats: ["No vetted web source was available."],
+      evidenceNotes: ["Local rows only."],
+      localEvidence: [],
+      sources: [],
+      generatedAt: "2026-01-01T00:00:00.000Z",
+      model: "gpt-5.4"
+    } satisfies SpeciesResearchResult;
+
+    const research = await researchSpeciesWithExternalSources({
+      apiKey: "sk-placeholder",
+      species: "Phacelia heterophylla",
+      importResult: importResult([
+        trial({ pAccession: "P1", species: "Phacelia heterophylla", treatment: "CS", pc: 4, sourceRow: 3 })
+      ]),
+      dashboard: {
+        batch: null,
+        metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
+        treatmentSummaries: [],
+        speciesSummaries: [],
+        pairedComparisons: [],
+        trialQueue: [],
+        dataQualityIssues: [],
+        askSuggestions: [],
+        speciesInsights: [],
+        aiInsightStatus: { configured: true, state: "not_generated", message: "", model: "gpt-5.4", generatedAt: null }
+      },
+      fetcher: async () => jsonResponse({}, 503),
+      sourceDiscoverer: async () => {
+        throw new Error("discovery unavailable");
+      },
+      synthesizer: async ({ sources }) => {
+        synthesizerSources = sources;
+        return synthesized;
+      }
+    });
+
+    expect(synthesizerSources).toEqual([]);
+    expect(research.status).toBe("ready");
   });
 });
 
@@ -501,7 +573,12 @@ describe("species research OpenAI validation", () => {
     abstractSnippet: "Phacelia seed germination responded to cold stratification."
   };
 
-  it("keeps only cited manual-source technique claims and taxonomy-inferred family", () => {
+  it("keeps only cited vetted-source technique claims and taxonomy-inferred family", () => {
+    const webSource: SpeciesResearchSource = {
+      ...source,
+      id: "openai_web:W1",
+      source: "openai_web"
+    };
     const research = parseSpeciesResearchResponse({
       responseText: JSON.stringify({
         plantFamily: "Wrongaceae",
@@ -516,7 +593,7 @@ describe("species research OpenAI validation", () => {
             recommendation: "Run paired CS and control trays.",
             evidenceSummary: "The family-level source and local rows both point to CS as the next trial.",
             deterministicConfidence: "Promising",
-            sourceIds: ["manual:W1", "manual:missing"],
+            sourceIds: ["openai_web:W1", "openai_web:missing"],
             localRows: [3, 999],
             protocolFrame: "Repeat the local CS code exactly; temperature, moisture, substrate, and light are not defined here.",
             experimentalControls: "Use matched control trays with equal seed numbers.",
@@ -545,14 +622,14 @@ describe("species research OpenAI validation", () => {
         genus: "Phacelia",
         family: "Hydrophyllaceae"
       },
-      sources: [source],
+      sources: [webSource],
       model: "gpt-5.5",
       generatedAt: "2026-01-01T00:00:00.000Z"
     });
 
     expect(research.plantFamily).toBe("Hydrophyllaceae");
     expect(research.recommendedTechniques[0]).toMatchObject({
-      sourceIds: ["manual:W1"],
+      sourceIds: ["openai_web:W1"],
       localRows: [3],
       deterministicConfidence: "Promising"
     });
@@ -685,7 +762,7 @@ describe("species research OpenAI validation", () => {
     });
   });
 
-  it("withholds model narrative when no valid local or manual-source technique survives validation", () => {
+  it("withholds externally cited techniques that have no selected-species row anchor", () => {
     const research = parseSpeciesResearchResponse({
       responseText: JSON.stringify({
         plantFamily: "Hydrophyllaceae",
@@ -698,9 +775,9 @@ describe("species research OpenAI validation", () => {
             technique: "Smoke treatment",
             evidenceLevel: "genus_background",
             recommendation: "Unsupported recommendation.",
-            evidenceSummary: "Cites a missing source.",
+            evidenceSummary: "Cites external research but no valid local row.",
             deterministicConfidence: "Promising",
-            sourceIds: ["manual:missing"],
+            sourceIds: [source.id],
             localRows: [999],
             protocolFrame: "Unsupported protocol.",
             experimentalControls: "Unsupported controls.",

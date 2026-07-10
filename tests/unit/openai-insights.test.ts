@@ -1,11 +1,25 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const { responsesCreateMock } = vi.hoisted(() => ({ responsesCreateMock: vi.fn() }));
+
+vi.mock("openai", () => ({
+  default: class OpenAIMock {
+    responses = { create: responsesCreateMock };
+  }
+}));
+
 import {
+  answerSpreadsheetQuestion,
   buildSpeciesInsightContexts,
+  discoverSpeciesResearchSources,
+  extractSpeciesResearchSources,
+  generateSpeciesResearch,
   parseAskAnswerResponse,
   parseHeaderMappingResponse,
-  parseSpeciesInsightResponse
+  parseSpeciesInsightResponse,
+  suggestHeaderAliases
 } from "../../electron/main/openai-insights";
-import type { ImportResult, TrialRecord } from "../../src/core/types";
+import type { DashboardData, ImportResult, TrialRecord } from "../../src/core/types";
 import { parseTreatment } from "../../src/core/treatments";
 
 function trial(partial: Partial<TrialRecord> & Pick<TrialRecord, "pAccession" | "species" | "treatment" | "pc">): TrialRecord {
@@ -22,15 +36,21 @@ function trial(partial: Partial<TrialRecord> & Pick<TrialRecord, "pAccession" | 
     propaguleType: "s",
     ttd: null,
     pc: partial.pc,
+    pcRaw: partial.pcRaw ?? partial.pc,
+    pcScale: partial.pcScale ?? null,
     ced: null,
     wsed: null,
     csed: null,
     linerStart: null,
     linerTtd: null,
-    lpc: null,
+    lpc: partial.lpc ?? null,
+    lpcRaw: partial.lpcRaw ?? partial.lpc ?? null,
+    lpcScale: partial.lpcScale ?? null,
     fourStart: null,
     fourTtd: null,
-    fourPc: null,
+    fourPc: partial.fourPc ?? null,
+    fourPcRaw: partial.fourPcRaw ?? partial.fourPc ?? null,
+    fourPcScale: partial.fourPcScale ?? null,
     location: null,
     status: "ND",
     pcd: null,
@@ -56,6 +76,318 @@ function importResult(trials: TrialRecord[]): ImportResult {
     issues: []
   };
 }
+
+function dashboard(): DashboardData {
+  return {
+    batch: null,
+    metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
+    treatmentSummaries: [],
+    speciesSummaries: [],
+    pairedComparisons: [],
+    trialQueue: [],
+    dataQualityIssues: [],
+    askSuggestions: [],
+    speciesInsights: [],
+    aiInsightStatus: { configured: true, state: "not_generated", message: "", model: "gpt-5.4", generatedAt: null }
+  };
+}
+
+function validSpeciesResearchResponse(sourceRow = 2): string {
+  return JSON.stringify({
+    plantFamily: "Hydrophyllaceae",
+    familySource: "ai_inferred",
+    summary: "The local CS row is a trial lead that still needs replication.",
+    likelyStrategy: "Repeat CS against a paired control.",
+    familyPattern: "Family context is hypothesis-generating only.",
+    recommendedTechniques: [
+      {
+        technique: "Local CS code",
+        evidenceLevel: "local_species",
+        recommendation: "Repeat the local CS code exactly against a control.",
+        evidenceSummary: `Workbook row ${sourceRow} is the cited local lead.`,
+        deterministicConfidence: "Needs replication",
+        sourceIds: [],
+        localRows: [sourceRow],
+        protocolFrame: "Repeat the local code because duration and temperature are undefined.",
+        experimentalControls: "Use a paired untreated control with equal seed numbers.",
+        successCriteria: "Replicated CS trays exceed controls and produce usable seedlings.",
+        riskChecks: "Check fill, viability, contamination, and abnormal seedlings.",
+        whatToTry: "Run paired CS and control trays.",
+        whatWouldChangeMind: "Controls match CS after replication."
+      }
+    ],
+    protocolGaps: ["CS duration and temperature are not defined."],
+    nextTrialDesign: "Repeat paired trays across multiple accessions.",
+    caveats: ["The evidence is local and underpowered."],
+    evidenceNotes: [`Row ${sourceRow} anchors the recommendation.`]
+  });
+}
+
+describe("OpenAI research source discovery", () => {
+  beforeEach(() => {
+    responsesCreateMock.mockReset();
+  });
+
+  it("keeps only cited, taxon-relevant HTTPS sources with supporting snippets", () => {
+    const citedText =
+      "Phacelia heterophylla germination increased after a controlled cold treatment [USFS]. " +
+      "A general crop storage review discusses warehouse humidity [UNRELATED]. " +
+      "Hydrophyllaceae dormancy literature supports testing stratification as a family-level hypothesis [FAMILY].";
+    const citation = (marker: string, title: string, url: string) => ({
+      type: "url_citation",
+      title,
+      url,
+      start_index: citedText.indexOf(marker),
+      end_index: citedText.indexOf(marker) + marker.length
+    });
+    const sources = extractSpeciesResearchSources(
+      {
+        output: [
+          {
+            type: "web_search_call",
+            action: {
+              type: "search",
+              queries: ["Phacelia heterophylla seed germination"],
+              sources: [
+                {
+                  type: "url",
+                  url: "https://www.fs.usda.gov/research/treesearch/1234?utm_source=openai"
+                },
+                { type: "url", url: "https://extension.oregonstate.edu/catalog/pub/em-1234" },
+                { type: "url", url: "https://example.org/" },
+                { type: "url", url: "https://google.com/search?q=phacelia" },
+                { type: "url", url: "http://example.edu/insecure" }
+              ]
+            }
+          },
+          {
+            type: "message",
+            content: [
+              {
+                type: "output_text",
+                text: citedText,
+                annotations: [
+                  citation(
+                    "[USFS]",
+                    "Phacelia heterophylla germination research",
+                    "https://fs.usda.gov/research/treesearch/1234"
+                  ),
+                  citation("[UNRELATED]", "Seed science article (2021)", "https://doi.org/10.1000/unrelated"),
+                  citation("[FAMILY]", "Seed science article (2022)", "https://doi.org/10.1000/family-study")
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        species: "Phacelia heterophylla",
+        taxonomy: {
+          requestedName: "Phacelia heterophylla",
+          canonicalName: "Phacelia heterophylla",
+          scientificName: "Phacelia heterophylla Pursh",
+          rank: "SPECIES",
+          status: "ACCEPTED",
+          matchType: "EXACT",
+          confidence: 99,
+          usageKey: 1,
+          genus: "Phacelia",
+          family: "Hydrophyllaceae"
+        }
+      }
+    );
+
+    expect(sources).toHaveLength(2);
+    expect(sources.map((source) => source.url)).toEqual([
+      "https://fs.usda.gov/research/treesearch/1234",
+      "https://doi.org/10.1000/family-study"
+    ]);
+    expect(sources[0]).toMatchObject({
+      source: "openai_web",
+      title: "Phacelia heterophylla germination research",
+      relevance: "species",
+      matchedQuery: "Phacelia heterophylla seed germination",
+      abstractSnippet:
+        "Phacelia heterophylla germination increased after a controlled cold treatment [USFS]."
+    });
+    expect(sources[1]).toMatchObject({
+      year: 2022,
+      doi: "https://doi.org/10.1000/family-study",
+      relevance: "family",
+      abstractSnippet:
+        "Hydrophyllaceae dormancy literature supports testing stratification as a family-level hypothesis [FAMILY]."
+    });
+    expect(sources.some((source) => source.url.includes("unrelated"))).toBe(false);
+    expect(sources.some((source) => source.url.includes("oregonstate"))).toBe(false);
+    expect(new Set(sources.map((source) => source.id)).size).toBe(2);
+  });
+
+  it("uses gpt-5.4-mini low-reasoning web search with enough budget for cited output", async () => {
+    responsesCreateMock.mockResolvedValueOnce({ output: [] });
+
+    await discoverSpeciesResearchSources({
+      apiKey: "sk-placeholder",
+      species: "Phacelia heterophylla",
+      taxonomy: null
+    });
+
+    expect(responsesCreateMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        model: "gpt-5.4-mini",
+        reasoning: { effort: "low" },
+        max_output_tokens: 3000,
+        tools: [{ type: "web_search", search_context_size: "medium" }],
+        tool_choice: "auto",
+        include: ["web_search_call.action.sources"],
+        store: false
+      })
+    );
+  });
+});
+
+describe("OpenAI request model routing", () => {
+  beforeEach(() => {
+    responsesCreateMock.mockReset();
+  });
+
+  it("uses gpt-5.4 medium for successful species synthesis without calling 5.5", async () => {
+    responsesCreateMock.mockResolvedValueOnce({ output_text: validSpeciesResearchResponse() });
+    const result = await generateSpeciesResearch({
+      apiKey: "sk-placeholder",
+      species: "Phacelia heterophylla",
+      importResult: importResult([
+        trial({
+          pAccession: "P1",
+          species: "Phacelia heterophylla",
+          family: "Hydrophyllaceae",
+          treatment: "CS",
+          pc: 4,
+          pcRaw: 82,
+          pcScale: "percent_0_100",
+          lpc: 3,
+          lpcRaw: 61,
+          lpcScale: "percent_0_100",
+          fourPc: 2,
+          fourPcRaw: 42,
+          fourPcScale: "percent_0_100",
+          sourceRow: 2
+        }),
+        trial({
+          pAccession: "P2",
+          species: "Phacelia secunda",
+          family: "Hydrophyllaceae",
+          treatment: "C",
+          pc: 3,
+          pcRaw: 55,
+          pcScale: "percent_0_100",
+          sourceRow: 3
+        })
+      ]),
+      dashboard: dashboard(),
+      taxonomy: null,
+      sources: []
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.model).toBe("gpt-5.4");
+    expect(result.caveats).toContain(
+      "Web discovery returned no vetted source, so these technique candidates rely only on cited local workbook rows."
+    );
+    expect(responsesCreateMock).toHaveBeenCalledTimes(1);
+    expect(responsesCreateMock.mock.calls[0][0]).toMatchObject({
+      model: "gpt-5.4",
+      reasoning: { effort: "medium" }
+    });
+    const requestPayload = JSON.parse(responsesCreateMock.mock.calls[0][0].input);
+    expect(requestPayload.localEvidence.selectedTrials[0]).toMatchObject({
+      pc: 4,
+      pcRaw: 82,
+      pcScale: "percent_0_100",
+      lpc: 3,
+      lpcRaw: 61,
+      lpcScale: "percent_0_100",
+      fourPc: 2,
+      fourPcRaw: 42,
+      fourPcScale: "percent_0_100"
+    });
+    expect(requestPayload.localEvidence.relatedFamilyOrGenusTrials[0]).toMatchObject({
+      species: "Phacelia secunda",
+      pc: 3,
+      pcRaw: 55,
+      pcScale: "percent_0_100"
+    });
+    expect(responsesCreateMock.mock.calls[0][0].instructions).toContain("pcRaw/pcScale");
+  });
+
+  it("retries malformed species synthesis once with gpt-5.5", async () => {
+    responsesCreateMock
+      .mockResolvedValueOnce({ output_text: "{malformed" })
+      .mockResolvedValueOnce({ output_text: validSpeciesResearchResponse() });
+
+    const result = await generateSpeciesResearch({
+      apiKey: "sk-placeholder",
+      species: "Phacelia heterophylla",
+      importResult: importResult([
+        trial({ pAccession: "P1", species: "Phacelia heterophylla", treatment: "CS", pc: 4, sourceRow: 2 })
+      ]),
+      dashboard: dashboard(),
+      taxonomy: null,
+      sources: []
+    });
+
+    expect(result.status).toBe("ready");
+    expect(result.model).toBe("gpt-5.5");
+    expect(responsesCreateMock.mock.calls.map(([request]) => request.model)).toEqual(["gpt-5.4", "gpt-5.5"]);
+  });
+
+  it("does not escalate an ordinary synthesis request failure to gpt-5.5", async () => {
+    responsesCreateMock.mockRejectedValueOnce(new Error("request unavailable"));
+
+    const result = await generateSpeciesResearch({
+      apiKey: "sk-placeholder",
+      species: "Phacelia heterophylla",
+      importResult: importResult([
+        trial({ pAccession: "P1", species: "Phacelia heterophylla", treatment: "CS", pc: 4, sourceRow: 2 })
+      ]),
+      dashboard: dashboard(),
+      taxonomy: null,
+      sources: []
+    });
+
+    expect(result.status).toBe("no_sources");
+    expect(responsesCreateMock).toHaveBeenCalledTimes(1);
+    expect(responsesCreateMock.mock.calls[0][0].model).toBe("gpt-5.4");
+  });
+
+  it("routes Ask and header mapping to gpt-5.4-mini medium and low", async () => {
+    responsesCreateMock
+      .mockResolvedValueOnce({
+        output_text: JSON.stringify({
+          answer: "The cited row is a local trial lead.",
+          caveats: ["The evidence is underpowered."],
+          citedRows: [2]
+        })
+      })
+      .mockResolvedValueOnce({
+        output_text: JSON.stringify({ aliases: [{ header: "Taxon", canonical: "Species" }] })
+      });
+
+    await answerSpreadsheetQuestion({
+      apiKey: "sk-placeholder",
+      question: "What should we test next?",
+      context: { trials: [{ sourceRow: 2 }] }
+    });
+    await suggestHeaderAliases({
+      apiKey: "sk-placeholder",
+      profile: { worksheetName: "Trials", headers: ["Taxon"], missingHeaders: ["Species"] }
+    });
+
+    expect(responsesCreateMock.mock.calls.map(([request]) => [request.model, request.reasoning])).toEqual([
+      ["gpt-5.4-mini", { effort: "medium" }],
+      ["gpt-5.4-mini", { effort: "low" }]
+    ]);
+  });
+});
 
 describe("OpenAI species insight validation", () => {
   it("normalizes structured output while preserving deterministic confidence", () => {

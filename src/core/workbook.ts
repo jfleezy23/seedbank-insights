@@ -5,7 +5,12 @@ import ExcelJS from "exceljs";
 import { z } from "zod";
 import { parseObservationsFromTrial } from "./notes";
 import { parseTreatment } from "./treatments";
-import type { DataQualityIssue, ImportResult, TrialRecord } from "./types";
+import type {
+  DataQualityIssue,
+  ImportResult,
+  PropagationScoreScale,
+  TrialRecord
+} from "./types";
 
 export const REQUIRED_HEADERS = [
   "P_Accession",
@@ -94,6 +99,48 @@ function numberValue(value: unknown): number | null {
   return Number.isFinite(number) ? number : null;
 }
 
+interface ParsedPropagationScore {
+  value: number | null;
+  raw: number | null;
+  scale: PropagationScoreScale | null;
+}
+
+export function parsePropagationScore(value: unknown): ParsedPropagationScore {
+  const raw = numberValue(value);
+  if (raw === null) return { value: null, raw: null, scale: null };
+  if (raw < 0 || raw > 100) return { value: null, raw, scale: "invalid" };
+  if (raw <= 5) return { value: raw, raw, scale: "ordinal_0_5" };
+
+  const normalized = normalizePercentageScore(raw);
+  return { value: normalized, raw, scale: "percent_0_100" };
+}
+
+function normalizePercentageScore(raw: number): number {
+  if (raw === 0) return 0;
+  return raw <= 10 ? 1 : raw <= 25 ? 2 : raw <= 50 ? 3 : raw <= 75 ? 4 : 5;
+}
+
+function normalizeWorkbookScoreScales(trials: TrialRecord[]): void {
+  const normalizeField = (
+    valueKey: "pc" | "lpc" | "fourPc",
+    rawKey: "pcRaw" | "lpcRaw" | "fourPcRaw",
+    scaleKey: "pcScale" | "lpcScale" | "fourPcScale"
+  ) => {
+    const usesPercentages = trials.some((trial) => trial[scaleKey] === "percent_0_100");
+    if (!usesPercentages) return;
+    for (const trial of trials) {
+      const raw = trial[rawKey];
+      if (raw === null || raw === undefined || raw < 0 || raw > 100) continue;
+      trial[valueKey] = normalizePercentageScore(raw);
+      trial[scaleKey] = "percent_0_100";
+    }
+  };
+
+  normalizeField("pc", "pcRaw", "pcScale");
+  normalizeField("lpc", "lpcRaw", "lpcScale");
+  normalizeField("fourPc", "fourPcRaw", "fourPcScale");
+}
+
 function formatDateParts(year: number, month: number, day: number): string | null {
   if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) return null;
   if (year < 1900 || month < 1 || month > 12 || day < 1 || day > 31) return null;
@@ -167,6 +214,10 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
   if (!pAccession && !sourceAccession && !species && !treatment) return null;
   if (!pAccession || !species || !treatment) return null;
 
+  const pc = parsePropagationScore(get(row, "PC"));
+  const lpc = parsePropagationScore(get(row, "LPC"));
+  const fourPc = parsePropagationScore(get(row, "4PC"));
+
   const trial: TrialRecord = {
     id: `${pAccession}:${treatment}:${sourceRow}`,
     sourceRow,
@@ -179,16 +230,22 @@ function buildTrial(row: Map<string, unknown>, sourceRow: number): TrialRecord |
     startDate: dateValue(get(row, "Start")),
     propaguleType: stringValue(get(row, "PT")),
     ttd: dateValue(get(row, "TTD")),
-    pc: numberValue(get(row, "PC")),
+    pc: pc.value,
+    pcRaw: pc.raw,
+    pcScale: pc.scale,
     ced: dateValue(get(row, "CED", "CeD")),
     wsed: dateValue(get(row, "WSED")),
     csed: dateValue(get(row, "CSED", "CSeD")),
     linerStart: dateValue(get(row, "LS")),
     linerTtd: dateValue(get(row, "LTTD")),
-    lpc: numberValue(get(row, "LPC")),
+    lpc: lpc.value,
+    lpcRaw: lpc.raw,
+    lpcScale: lpc.scale,
     fourStart: dateValue(get(row, "4S")),
     fourTtd: dateValue(get(row, "4TTD")),
-    fourPc: numberValue(get(row, "4PC")),
+    fourPc: fourPc.value,
+    fourPcRaw: fourPc.raw,
+    fourPcScale: fourPc.scale,
     location: stringValue(get(row, "L(R:C|Z)", "L(R:C|G)")),
     status: statusValue(get(row, "D|ND")),
     pcd: stringValue(get(row, "PCD")),
@@ -206,6 +263,49 @@ function dataQualityFromTrials(trials: TrialRecord[]): DataQualityIssue[] {
   const species = (rows: TrialRecord[]) => [...new Set(rows.map((trial) => trial.species))].sort();
   const treatments = (rows: TrialRecord[]) => [...new Set(rows.map((trial) => trial.treatment))].sort();
   const issues: DataQualityIssue[] = [];
+  const scoreFields = [
+    { metric: "PC", scale: "pcScale" },
+    { metric: "LPC", scale: "lpcScale" },
+    { metric: "4PC", scale: "fourPcScale" }
+  ] as const;
+
+  for (const field of scoreFields) {
+    const invalidRows = trials.filter((trial) => trial[field.scale] === "invalid");
+    if (invalidRows.length) {
+      issues.push({
+        id: `invalid-${field.metric.toLowerCase()}-score`,
+        severity: "high",
+        category: "fix_first",
+        title: `Invalid ${field.metric} score`,
+        detail: `${field.metric} must be an ordinal class from 0-5 or an exact percentage from 0-100. Invalid values were retained as raw data but excluded from analysis.`,
+        impact: "Out-of-range scores can distort treatment rankings and paired effects.",
+        action: `Correct the ${field.metric} value or document it as missing before interpreting the affected rows.`,
+        affectedRows: invalidRows.length,
+        sourceRows: sourceRows(invalidRows),
+        species: species(invalidRows),
+        treatments: treatments(invalidRows),
+        metric: field.metric
+      });
+    }
+
+    const percentageRows = trials.filter((trial) => trial[field.scale] === "percent_0_100");
+    if (percentageRows.length) {
+      issues.push({
+        id: `normalized-${field.metric.toLowerCase()}-percentages`,
+        severity: "low",
+        category: "codebook",
+        title: `${field.metric} percentages normalized for comparison`,
+        detail: `This column was identified as percentage-based because it contains a value above 5. Raw percentages were preserved and the full column was mapped to the documented 0-5 propagation classes for analysis.`,
+        impact: "Normalized values are comparable in the dashboard, while raw percentages remain available for audit.",
+        action: `Confirm whether future ${field.metric} columns use ordinal classes, exact percentages, or an explicit scale column.`,
+        affectedRows: percentageRows.length,
+        sourceRows: sourceRows(percentageRows),
+        species: species(percentageRows),
+        treatments: treatments(percentageRows),
+        metric: field.metric
+      });
+    }
+  }
   if (missingSourceRows.length) {
     issues.push({
       id: "missing-source-accession",
@@ -315,6 +415,8 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
     const trial = buildTrial(mapped, rowNumber);
     if (trial) trials.push(trial);
   }
+
+  normalizeWorkbookScoreScales(trials);
 
   const observations = trials.flatMap(parseObservationsFromTrial);
   const issues = dataQualityFromTrials(trials);

@@ -4,12 +4,14 @@ import type {
   ImportResult,
   SpeciesResearchCacheStatus,
   SpeciesResearchResult,
+  SpeciesResearchSource,
   SpeciesTaxonomyMatch
 } from "../../src/core/types";
-import { generateSpeciesResearch } from "./openai-insights";
+import { discoverSpeciesResearchSources, generateSpeciesResearch } from "./openai-insights";
 
 type Fetcher = (input: string, init?: RequestInit) => Promise<Response>;
 type ResearchSynthesizer = typeof generateSpeciesResearch;
+type ResearchSourceDiscoverer = typeof discoverSpeciesResearchSources;
 const SOURCE_FETCH_TIMEOUT_MS = 10_000;
 
 interface GbifMatchResponse {
@@ -198,6 +200,7 @@ export async function researchSpeciesWithExternalSources({
   importResult,
   dashboard,
   fetcher = fetch,
+  sourceDiscoverer = discoverSpeciesResearchSources,
   synthesizer = generateSpeciesResearch
 }: {
   apiKey: string;
@@ -205,6 +208,7 @@ export async function researchSpeciesWithExternalSources({
   importResult: ImportResult;
   dashboard: DashboardData;
   fetcher?: Fetcher;
+  sourceDiscoverer?: ResearchSourceDiscoverer;
   synthesizer?: ResearchSynthesizer;
 }): Promise<SpeciesResearchResult> {
   const localSpecies = localSpeciesName(importResult, species);
@@ -216,12 +220,23 @@ export async function researchSpeciesWithExternalSources({
   } catch {
     taxonomy = null;
   }
+  let sources: SpeciesResearchSource[] = [];
+  try {
+    const family =
+      importResult.trials.find((trial) => speciesIdentity(trial.species) === speciesIdentity(localSpecies))?.family ??
+      taxonomy?.family ??
+      null;
+    sources = await sourceDiscoverer({ apiKey, species: localSpecies, taxonomy, family });
+  } catch {
+    console.warn("OpenAI source discovery was unavailable; continuing with local evidence only.");
+    sources = [];
+  }
   return synthesizer({
     apiKey,
     species: localSpecies,
     importResult,
     dashboard,
     taxonomy,
-    sources: []
+    sources
   });
 }

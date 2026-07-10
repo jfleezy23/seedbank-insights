@@ -3,7 +3,7 @@ import { test, expect } from "@playwright/test";
 test("dashboard renders primary insight surfaces in browser fallback", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Insight Board" })).toBeVisible();
-  await expect(page.getByText("Best paired signal")).toBeVisible();
+  await expect(page.getByText("Best analyzed paired comparison")).toBeVisible();
   await expect(page.getByText("Species assessment")).toBeVisible();
   await expect(page.getByText("Quality checks")).toBeVisible();
   await expect(page.getByText("Operational follow-up")).toBeVisible();
@@ -34,7 +34,22 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
         doneRate: 0.25,
         observationsExtracted: 1
       },
-      treatmentSummaries: [],
+      treatmentSummaries: [
+        {
+          treatment: "Cold stratification for 120 days with alternating temperatures",
+          rows: 2,
+          species: 2,
+          accessions: 2,
+          pcCount: 2,
+          pcMean: 4.5,
+          pcMedian: 4.5,
+          pcGe4Rate: 1,
+          lpcMean: null,
+          fourPcMean: null,
+          confidence: "Promising",
+          warning: "Needs replication."
+        }
+      ],
       speciesSummaries: [
         {
           species: "Phacelia heterophylla",
@@ -79,10 +94,13 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
           medianDiff: 1,
           ciLow: -1,
           ciHigh: 2,
+          speciesCount: 2,
           confidence: "Needs replication",
           falsePositiveRisk: "Elevated.",
           falseNegativeRisk: "Elevated. The treatment may work, but this dataset is underpowered.",
           additionalTrialsNeeded: 3,
+          replicationTargetBasis:
+            "Minimum paired rows and species needed for the next evidence-tier review; this is not a statistical power estimate.",
           examples: []
         }
       ],
@@ -98,8 +116,7 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
           reason: "The trial is marked done, but missing PC blocks treatment comparison.",
           sourceRows: [12],
           blockedMetric: "PC",
-          pc: null,
-          confidence: "Needs replication"
+          pc: null
         },
         {
           accession: "P2",
@@ -108,12 +125,11 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
           status: "ND",
           priority: "medium",
           nextDate: "2026-01-02",
-          nextStep: "Resolve ND follow-up for promising row 19.",
+          nextStep: "Resolve the ND follow-up and record the settled outcome.",
           reason: "High germination on an active row can shift recommendations once completion and survival are known.",
           sourceRows: [19],
           blockedMetric: "D|ND",
-          pc: 5,
-          confidence: "Promising"
+          pc: 5
         }
       ],
       dataQualityIssues: [
@@ -144,6 +160,20 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
           species: ["Ceanothus velutinus"],
           treatments: ["SCAR+CS"],
           metric: "Trt"
+        },
+        {
+          id: "sparse-notes",
+          severity: "low",
+          category: "notes",
+          title: "Sparse observation notes",
+          detail: "A completed row has no supporting note.",
+          impact: "The recorded outcome has less audit context.",
+          action: "Add an observation note when details are available.",
+          affectedRows: 1,
+          sourceRows: [21],
+          species: ["Phacelia heterophylla"],
+          treatments: ["CS"],
+          metric: "Notes"
         }
       ],
       askSuggestions: [],
@@ -210,13 +240,36 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
   await page.getByRole("button", { name: "Open Data Quality" }).click();
   await expect(page.getByText("Rows 12")).toBeVisible();
   await expect(page.getByText("Grindelia stricta")).toBeVisible();
+  await page.getByRole("button", { name: "Replication" }).click();
+  await expect(page.getByText(/n=2 paired rows across 2 species/)).toBeVisible();
+  await expect(page.getByText(/3 minimum additional paired rows to reach the next evidence-tier review/)).toBeVisible();
+  await expect(page.getByText("Replication target basis")).toBeVisible();
+  await expect(page.getByText(/not a statistical power estimate/)).toBeVisible();
   await page.getByRole("button", { name: "Codebook" }).click();
   await expect(page.getByText("Rows 19")).toBeVisible();
   await expect(page.getByText("Review the treatment codebook.")).toBeVisible();
+  await page.getByRole("button", { name: "Notes" }).click();
+  const lowIssue = page.locator(".quality-action.low", { hasText: "Sparse observation notes" });
+  await expect(lowIssue.locator("svg")).toHaveClass(/lucide-triangle-alert/);
+  await expect(page.getByRole("heading", { name: "Review priorities" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Trial Queue", exact: true }).click();
   await expect(page.getByText("Record PC score for row 12.")).toBeVisible();
-  await expect(page.getByText("Resolve ND follow-up for promising row 19.")).toBeVisible();
+  await expect(page.getByText("Resolve the ND follow-up and record the settled outcome.")).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Reference date" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "PC observation" })).toBeVisible();
+  await expect(page.getByRole("columnheader", { name: "Signal" })).toHaveCount(0);
+  await expect(page.getByText("5 / 5")).toBeVisible();
+  await expect(page.getByText("Promising", { exact: true })).toHaveCount(0);
+
+  await page.getByRole("button", { name: "Treatment Comparator", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Treatment score overview" })).toBeVisible();
+  await expect(page.getByText("Evidence tier", { exact: true })).toBeVisible();
+  const fullTreatmentLabel = page.getByText("Cold stratification for 120 days with alternating temperatures", {
+    exact: true
+  });
+  await expect(fullTreatmentLabel).toBeVisible();
+  await expect(fullTreatmentLabel).toHaveCSS("white-space", "normal");
 });
 
 test("overview cards navigate to dedicated workspaces", async ({ page }) => {
@@ -228,7 +281,7 @@ test("overview cards navigate to dedicated workspaces", async ({ page }) => {
 
   await page.getByRole("button", { name: "Insight Board", exact: true }).click();
   await page.getByRole("button", { name: "Open Species Explorer" }).click();
-  await expect(page.getByRole("heading", { name: "AI Species Assessment" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "AI Research Assessment" })).toBeVisible();
 
   await page.getByRole("button", { name: "Insight Board", exact: true }).click();
   await page.getByRole("button", { name: "Open Data Quality" }).click();
@@ -242,13 +295,22 @@ test("overview cards navigate to dedicated workspaces", async ({ page }) => {
 test("sidebar navigation renders distinct workspaces and settings state", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("img", { name: "Portland State University" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Insight Board", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page"
+  );
 
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "AI Species Assessment" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Species Explorer", exact: true })).toHaveAttribute(
+    "aria-current",
+    "page"
+  );
+  await expect(page.getByRole("button", { name: "Insight Board", exact: true })).not.toHaveAttribute("aria-current");
+  await expect(page.getByRole("heading", { name: "AI Research Assessment" })).toBeVisible();
   await expect(page.getByText("Import a workbook before researching species.")).toBeVisible();
 
   await page.getByRole("button", { name: "Treatment Comparator", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Treatment success" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Treatment score overview" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Paired trials first" })).toBeVisible();
   await expect(page.getByText("Data quality warnings")).toHaveCount(0);
 
@@ -258,7 +320,7 @@ test("sidebar navigation renders distinct workspaces and settings state", async 
 
   await page.getByRole("button", { name: "Data Quality", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Data quality action queue" })).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Review priorities" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Review priorities" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Ask", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Ask", exact: true })).toBeVisible();
@@ -341,7 +403,7 @@ test("species explorer researches a species with workbook-backed AI assessment",
             recommendation: "Run paired CS and control trays.",
             evidenceSummary: "Local row 3 supports CS as the next test.",
             deterministicConfidence: "Promising",
-            sourceIds: [],
+            sourceIds: ["source-1"],
             localRows: [3],
             protocolFrame: "Repeat the local CS treatment code exactly; the fixture does not define temperature or duration.",
             experimentalControls: "Use matched control trays with equal seed numbers and accessions.",
@@ -356,7 +418,20 @@ test("species explorer researches a species with workbook-backed AI assessment",
       caveats: ["Family-level evidence is not species-level proof."],
       evidenceNotes: ["Technique claims cite local rows."],
       localEvidence: [{ sourceRow: 3, accession: "P1", treatment: "CS", observation: "PC 5; status ND" }],
-      sources: [],
+      sources: [
+        {
+          id: "source-1",
+          title: "Native seed dormancy review",
+          url: "https://example.com/native-seed-review",
+          source: "openai_web",
+          venue: "Propagation Research Journal",
+          year: 2025,
+          doi: null,
+          matchedQuery: "Lomatium seed dormancy cold stratification",
+          relevance: "species",
+          abstractSnippet: "Supports dormancy-aware stratification trial framing."
+        }
+      ],
       generatedAt: "2026-01-01T00:00:00.000Z",
       model: "gpt-5.5"
     };
@@ -395,6 +470,8 @@ test("species explorer researches a species with workbook-backed AI assessment",
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
   await expect(page.getByText("Family unknown until research runs")).toBeVisible();
   await expect(page.getByRole("button", { name: "Researching..." })).toBeDisabled();
+  await expect(page.getByRole("heading", { name: "Running source-backed germination research" })).toBeVisible();
+  await expect(page.getByText("Searching web sources, checking taxonomy context, and connecting findings to workbook rows.")).toBeVisible();
   await expect.poll(() => page.evaluate(() => (window as any).speciesResearchArgs)).toEqual({
     batchId: 7,
     species: "Lomatium testii",
@@ -404,7 +481,7 @@ test("species explorer researches a species with workbook-backed AI assessment",
   await expect(page.getByText("Cold stratification is the best research-backed trial candidate, but still needs replication.")).toBeVisible();
   await expect(page.getByText("Use cold stratification as a small paired trial, not as a production protocol.")).toBeVisible();
   await expect(page.getByText("Apiaceae · Family inferred from taxonomy")).toBeVisible();
-  await expect(page.getByRole("heading", { name: "Workbook-backed technique candidates" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Research-backed technique candidates" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Protocol gaps to resolve" })).toBeVisible();
   await expect(page.getByText("Mixed evidence")).toBeVisible();
   await expect(page.getByText("Protocol frame")).toBeVisible();
@@ -412,15 +489,36 @@ test("species explorer researches a species with workbook-backed AI assessment",
   await expect(page.getByText("Success criteria")).toBeVisible();
   await expect(page.getByText("Risk checks")).toBeVisible();
   await expect(page.getByText("CS temperature, substrate, moisture, and light regime are not defined in this fixture.")).toBeVisible();
-  await expect(page.getByText("Sources: local workbook rows only")).toBeVisible();
+  await expect(page.getByText("Sources: Native seed dormancy review (2025)")).toBeVisible();
   await expect(page.getByText("Local rows: 3")).toBeVisible();
+  await expect(page.getByText("Sources cited in this assessment; workbook rows own deterministic evidence tiers.")).toBeVisible();
   await expect(page.getByRole("link", { name: /GBIF species search/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh research" })).toBeVisible();
   await expect(page.getByText("Local workbook evidence and deterministic guardrails")).toBeVisible();
+  const assessmentCard = page.locator(".ai-assessment-card");
+  const supportGrid = page.locator(".species-support-grid");
+  await expect(assessmentCard).toBeVisible();
+  await expect
+    .poll(() =>
+      page.locator(".species-detail").evaluate((detail) => {
+        const card = detail.querySelector(".ai-assessment-card");
+        const support = detail.querySelector(".species-support-grid");
+        return Boolean(card && support && card.compareDocumentPosition(support) & Node.DOCUMENT_POSITION_FOLLOWING);
+      })
+    )
+    .toBe(true);
+  const familyCardSpacing = await supportGrid.locator(".species-detail-section").first().evaluate((card) => {
+    const heading = card.querySelector("h4");
+    const copy = card.querySelector("p");
+    if (!heading || !copy) return Number.POSITIVE_INFINITY;
+    return copy.getBoundingClientRect().top - heading.getBoundingClientRect().bottom;
+  });
+  expect(familyCardSpacing).toBeLessThan(20);
 });
 
 test("species explorer exposes every imported species option", async ({ page }) => {
   await page.addInitScript(() => {
+    (window as any).__researchCalls = 0;
     const speciesSummaries = Array.from({ length: 250 }, (_value, index) => ({
       species: `Species ${String(index + 1).padStart(2, "0")} testii`,
       rows: 1,
@@ -481,25 +579,28 @@ test("species explorer exposes every imported species option", async ({ page }) 
       saveOpenAiKey: async () => ({ configured: true, safeStorageAvailable: true, dashboard: baseDashboard }),
       clearOpenAiKey: async () => ({ configured: false, safeStorageAvailable: true }),
       generateSpeciesInsights: async () => baseDashboard,
-      researchSpecies: async (_batchId: number, species: string) => ({
-        species,
-        status: "no_sources",
-        plantFamily: null,
-        familySource: "unknown",
-        deterministicConfidence: "Needs replication",
-        summary: "No cached research in this test.",
-        likelyStrategy: "Import evidence remains visible.",
-        familyPattern: "Family context is unresolved.",
-        recommendedTechniques: [],
-        protocolGaps: ["No cached response."],
-        nextTrialDesign: "Repeat local trials.",
-        caveats: ["No AI output."],
-        evidenceNotes: ["No cache."],
-        localEvidence: [],
-        sources: [],
-        generatedAt: "2026-01-01T00:00:00.000Z",
-        model: null
-      }),
+      researchSpecies: async (_batchId: number, species: string) => {
+        (window as any).__researchCalls += 1;
+        return {
+          species,
+          status: "no_sources",
+          plantFamily: null,
+          familySource: "unknown",
+          deterministicConfidence: "Needs replication",
+          summary: "No cached research in this test.",
+          likelyStrategy: "Import evidence remains visible.",
+          familyPattern: "Family context is unresolved.",
+          recommendedTechniques: [],
+          protocolGaps: ["No cached response."],
+          nextTrialDesign: "Repeat local trials.",
+          caveats: ["No AI output."],
+          evidenceNotes: ["No cache."],
+          localEvidence: [],
+          sources: [],
+          generatedAt: "2026-01-01T00:00:00.000Z",
+          model: null
+        };
+      },
       askQuestion: async () => ({
         answer: "No answer.",
         caveats: [],
@@ -512,11 +613,20 @@ test("species explorer exposes every imported species option", async ({ page }) 
 
   await page.goto("/");
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
-  const lastSpecies = page.getByRole("button").filter({ hasText: "Species 250 testii" });
-  await expect(lastSpecies).toHaveCount(1);
-  await lastSpecies.scrollIntoViewIfNeeded();
+  await expect(page.getByText("OpenAI key is not configured")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load cached research" })).toBeDisabled();
+  await expect.poll(() => page.evaluate(() => (window as any).__researchCalls)).toBe(0);
+  const speciesList = page.getByRole("navigation", { name: "Species" });
+  await expect(speciesList.getByRole("button")).toHaveCount(250);
+  await page.getByLabel("Filter species").fill("Species 250");
+  await expect(speciesList.getByRole("button")).toHaveCount(1);
+  const lastSpecies = speciesList.getByRole("button", { name: /Species 250 testii/ });
+  await expect(lastSpecies).toHaveAttribute("aria-pressed", "false");
   await lastSpecies.click();
+  await expect(lastSpecies).toHaveAttribute("aria-pressed", "true");
   await expect(page.getByRole("heading", { name: "Species 250 testii" })).toBeVisible();
+  await page.getByLabel("Filter species").fill("not a species");
+  await expect(page.getByText("No species match this filter.")).toBeVisible();
 });
 
 test("saving a key immediately enables AI controls without auto-generating", async ({ page }) => {

@@ -87,15 +87,23 @@ export function DataQualityPanel({
                 <AlertTriangle size={17} />
                 <div>
                   <strong>
-                    {comparison.treatment} vs {comparison.baseline} needs more paired trials
+                    {comparison.additionalTrialsNeeded > 0
+                      ? `${comparison.treatment} vs ${comparison.baseline} needs more paired trials`
+                      : `${comparison.treatment} vs ${comparison.baseline} needs a formal replication design`}
                   </strong>
                   <span>
-                    n={comparison.n}; {comparison.additionalTrialsNeeded} more paired trial
-                    {comparison.additionalTrialsNeeded === 1 ? "" : "s"} estimated before a firmer call.
+                    n={comparison.n} paired rows across {comparison.speciesCount} species;{" "}
+                    {comparison.additionalTrialsNeeded > 0
+                      ? `${comparison.additionalTrialsNeeded} minimum additional paired row${comparison.additionalTrialsNeeded === 1 ? "" : "s"} to reach the next evidence-tier review.`
+                      : "the minimum review threshold is met, but the observed effect remains uncertain. Use a formal power design for the next replication."}
                   </span>
                 </div>
               </div>
               <p>{comparison.falseNegativeRisk}</p>
+              <div className="quality-action-callout">
+                <b>Replication target basis</b>
+                <span>{comparison.replicationTargetBasis}</span>
+              </div>
               <div className="quality-tags">
                 <span>{comparison.confidence}</span>
                 <span>Mean lift {comparison.meanDiff}</span>
@@ -107,7 +115,7 @@ export function DataQualityPanel({
         {visibleIssues.map((issue) => (
           <article key={issue.id ?? `${issue.title}-${issue.affectedRows}`} className={`quality-action ${issue.severity}`}>
             <div className="quality-action-topline">
-              {issue.severity === "low" ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}
+              <AlertTriangle size={17} />
               <div>
                 <strong>{issue.title}</strong>
                 <span>{issue.detail}</span>

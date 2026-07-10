@@ -43,7 +43,7 @@ For desktop apps, packaging is not launch verification. Before claiming a packag
 
 ## Statistical Guardrails
 
-- Treat `PC`, `LPC`, and `4PC` as ordinal 0-5 scores unless exact extracted counts exist.
+- Preserve raw `PC`, `LPC`, and `4PC` values. Treat a score column containing only 0-5 values as ordinal classes; a valid value above 5 identifies that column as exact percentages, which must be normalized to the documented classes for cross-row analysis.
 - Prefer paired accession/species comparisons over raw treatment averages.
 - Label evidence as `Strong signal`, `Promising`, `Inconclusive`, or `Needs replication`.
 - Guard against false positives: warn on one-off high scores, rare treatments, multiple comparisons, uneven species mix, and intervals that cross no effect.
@@ -97,3 +97,11 @@ Append new implementation or data insights here as they are discovered.
 - Packaged demo builds can read pre-generated species research cache from bundled assets, but app-generated cache still belongs in user data and should not be mixed into SQLite.
 - Species Explorer must not silently cap the visible species list. Future workbooks may contain hundreds of taxa, so selector tests should cover hundreds of options and the UI should rely on scrolling/search/filtering rather than truncation.
 - UI badges and pills should use the established centered badge template (`inline-flex`, `align-items: center`, `justify-content: center`, explicit min-height, and line-height control). Do not make up one-off pill spacing with arbitrary padding that leaves text visually off-center.
+- The workbook data dictionary permits `PC`, `LPC`, and `4PC` as either 0-5 classes or exact 0-100 percentages. Preserve raw values and scale metadata; normalized classes are analytical derivatives, not replacements for source data.
+- A minimum-additional-pairs count based on evidence-tier thresholds is not a statistical power calculation. Label it as a review threshold and do not call it a power estimate.
+- Paired-comparison strength must include taxonomic breadth. Repeated accessions from one species cannot independently support a cross-species `Strong signal` label.
+- Species Explorer research needs a real source-discovery step. Model knowledge alone is not external evidence; only display clickable sources returned by the web-search call and validated against the synthesis citations.
+- Trial Queue rows are operational observations, not independent confidence assessments. Do not assign evidence labels from a single row score.
+- Public macOS releases are a notarization workflow, not merely `electron-builder` packaging: preflight a valid notary keychain profile, build a signed arm64 DMG, verify `codesign` and `hdiutil`, submit the DMG with `xcrun notarytool submit --wait --keychain-profile <profile>`, staple and validate it, mount it, and verify the contained app with Gatekeeper before attaching it to GitHub. Do not publish a signed-but-unnotarized DMG as a public release.
+- The notary preflight must happen before building release artifacts: `xcrun notarytool history --keychain-profile <profile>`. If the profile is missing, recreate it interactively with `xcrun notarytool store-credentials`; never put the app-specific password in shell history, source files, logs, GitHub secrets, or release notes.
+- A public release asset must contain no raw workbook, SQLite database, API key, or AI response cache. Confirm `assets/ai-response-cache/`, `P_accessions_new.xlsx`, `.env*`, `*.sqlite*`, and release build output remain ignored/untracked before staging and before GitHub upload.

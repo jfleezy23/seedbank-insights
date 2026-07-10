@@ -13,20 +13,22 @@ export function TreatmentChart({ summaries }: TreatmentChartProps) {
     .map((summary) => ({
       treatment: summary.treatment,
       pcMean: summary.pcMean ?? 0,
-      pcCount: summary.pcCount,
-      confidence: summary.confidence
+      pcCount: summary.pcCount
     }));
 
   return (
     <section className="panel treatment-chart">
       <div className="panel-heading">
         <div>
-          <h2>Treatment success</h2>
+          <h2>Treatment score overview</h2>
           <p>Ordinal PC scores. Effect size first, sample size always visible.</p>
         </div>
-        <ConfidenceBadge label={leadingConfidence} />
+        <div className="evidence-tier">
+          <span>Evidence tier</span>
+          <ConfidenceBadge label={leadingConfidence} />
+        </div>
       </div>
-      <div className="native-chart" role="img" aria-label="Treatment success by mean PC score">
+      <div className="native-chart" role="img" aria-label="Treatment score overview by mean PC score">
         {data.map((row) => (
           <div className="native-chart-row" key={row.treatment}>
             <span>{row.treatment}</span>

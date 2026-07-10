@@ -5,7 +5,6 @@ import {
   type ColumnDef
 } from "@tanstack/react-table";
 import type { TrialQueueItem } from "../core/types";
-import { ConfidenceBadge } from "./ConfidenceBadge";
 
 const columns: Array<ColumnDef<TrialQueueItem>> = [
   {
@@ -42,13 +41,13 @@ const columns: Array<ColumnDef<TrialQueueItem>> = [
     accessorKey: "blockedMetric"
   },
   {
-    header: "Due",
+    header: "Reference date",
     accessorKey: "nextDate"
   },
   {
-    header: "Signal",
-    accessorKey: "confidence",
-    cell: (info) => <ConfidenceBadge label={info.row.original.confidence} />
+    header: "PC observation",
+    accessorKey: "pc",
+    cell: (info) => (info.row.original.pc === null ? "Not recorded" : `${info.row.original.pc} / 5`)
   }
 ];
 

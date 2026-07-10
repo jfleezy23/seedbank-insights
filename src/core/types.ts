@@ -4,6 +4,8 @@ export type ConfidenceLabel =
   | "Inconclusive"
   | "Needs replication";
 
+export type PropagationScoreScale = "ordinal_0_5" | "percent_0_100" | "invalid";
+
 export type ObservationKind =
   | "pc"
   | "germinated"
@@ -40,15 +42,21 @@ export interface TrialRecord {
   propaguleType: string | null;
   ttd: string | null;
   pc: number | null;
+  pcRaw?: number | null;
+  pcScale?: PropagationScoreScale | null;
   ced: string | null;
   wsed: string | null;
   csed: string | null;
   linerStart: string | null;
   linerTtd: string | null;
   lpc: number | null;
+  lpcRaw?: number | null;
+  lpcScale?: PropagationScoreScale | null;
   fourStart: string | null;
   fourTtd: string | null;
   fourPc: number | null;
+  fourPcRaw?: number | null;
+  fourPcScale?: PropagationScoreScale | null;
   location: string | null;
   status: "D" | "ND" | null;
   pcd: string | null;
@@ -110,7 +118,7 @@ export interface SpeciesTaxonomyMatch {
 
 export interface SpeciesResearchSource {
   id: string;
-  source: "manual";
+  source: "manual" | "openai_web";
   title: string;
   year: number | null;
   venue: string | null;
@@ -254,6 +262,7 @@ export interface PairedComparison {
   baseline: string;
   treatment: string;
   n: number;
+  speciesCount: number;
   improved: number;
   tied: number;
   worse: number;
@@ -265,6 +274,7 @@ export interface PairedComparison {
   falsePositiveRisk: string;
   falseNegativeRisk: string;
   additionalTrialsNeeded: number;
+  replicationTargetBasis: string;
   examples: Array<{
     accession: string;
     species: string;
@@ -286,7 +296,6 @@ export interface TrialQueueItem {
   sourceRows: number[];
   blockedMetric: "PC" | "D|ND" | "LPC" | "4PC" | "Notes" | "Replication";
   pc: number | null;
-  confidence: ConfidenceLabel;
 }
 
 export interface SpeciesResearchCacheStatus {

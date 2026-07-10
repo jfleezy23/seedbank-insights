@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import OpenAI from "openai";
 import { z } from "zod";
 import { REQUIRED_HEADERS, type WorkbookHeaderProfile } from "../../src/core/workbook";
@@ -18,8 +19,214 @@ import type {
   TrialRecord
 } from "../../src/core/types";
 
-export const OPENAI_INSIGHT_MODEL = "gpt-5.5";
+export const OPENAI_INSIGHT_MODEL = "gpt-5.4";
+export const OPENAI_MINI_MODEL = "gpt-5.4-mini";
+export const OPENAI_RESEARCH_RETRY_MODEL = "gpt-5.5";
 export const SPECIES_INSIGHT_SCHEMA_VERSION = "species-insight-v2";
+
+function openAiClient(apiKey: string, timeout = 120_000, maxRetries = 1): OpenAI {
+  return new OpenAI({ apiKey, timeout, maxRetries });
+}
+
+interface SpeciesResearchDiscoveryContext {
+  species: string;
+  taxonomy: SpeciesTaxonomyMatch | null;
+  family?: string | null;
+  query?: string;
+}
+
+interface WebSourceCandidate {
+  url: string;
+  title: string;
+  matchedQuery: string;
+  snippet: string;
+}
+
+function recordValue(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === "object" ? (value as Record<string, unknown>) : null;
+}
+
+function normalizedWebSourceUrl(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:") return null;
+
+  url.hash = "";
+  url.hostname = url.hostname.replace(/^www\./i, "").toLowerCase();
+  for (const key of [...url.searchParams.keys()]) {
+    if (/^(utm_.+|gclid|fbclid|mc_cid|mc_eid)$/i.test(key)) url.searchParams.delete(key);
+  }
+  url.searchParams.sort();
+  if (url.pathname.length > 1) url.pathname = url.pathname.replace(/\/+$/, "");
+
+  const host = url.hostname;
+  const path = url.pathname.toLowerCase();
+  if (
+    ["google.com", "bing.com", "search.yahoo.com", "duckduckgo.com"].some(
+      (domain) => host === domain || host.endsWith(`.${domain}`)
+    )
+  ) {
+    return null;
+  }
+  if (["/search", "/search/"].includes(path)) return null;
+  if (!url.search && ["/", "/home", "/index", "/index.html", "/homepage"].includes(path)) return null;
+
+  return url.toString();
+}
+
+function sourceRelevance(
+  title: string,
+  url: string,
+  snippet: string,
+  context: SpeciesResearchDiscoveryContext
+): SpeciesResearchSource["relevance"] | null {
+  const { species, taxonomy } = context;
+  let decodedUrl = url;
+  try {
+    decodedUrl = decodeURIComponent(url);
+  } catch {
+    // The normalized HTTPS URL is still usable for coarse relevance matching.
+  }
+  const normalizeForMatch = (value: string): string =>
+    normalizeSpaces(value.toLowerCase().replace(/[^a-z0-9]+/g, " "));
+  const haystack = normalizeForMatch(`${title} ${decodedUrl} ${snippet}`);
+  const containsTerm = (term: string): boolean => Boolean(term) && ` ${haystack} `.includes(` ${term} `);
+  const normalizedSpecies = normalizeForMatch(species);
+  if (normalizedSpecies.includes(" ") && containsTerm(normalizedSpecies)) return "species";
+  const genus = normalizeForMatch(taxonomy?.genus ?? normalizedSpecies.split(" ")[0] ?? "");
+  if (containsTerm(genus)) return "genus";
+  const family = normalizeForMatch(normalizePlantFamilyName(context.family ?? taxonomy?.family) ?? "");
+  if (containsTerm(family)) return "family";
+  return null;
+}
+
+function normalizeSpaces(value: string): string {
+  return value.trim().replace(/\s+/g, " ");
+}
+
+function citationSnippet(text: unknown, startIndex: unknown, endIndex: unknown): string | null {
+  if (
+    typeof text !== "string" ||
+    typeof startIndex !== "number" ||
+    typeof endIndex !== "number" ||
+    !Number.isInteger(startIndex) ||
+    !Number.isInteger(endIndex) ||
+    startIndex < 0 ||
+    endIndex <= startIndex ||
+    endIndex > text.length
+  ) {
+    return null;
+  }
+
+  const beforeCitation = text.slice(0, startIndex);
+  const sentenceStart = Math.max(
+    beforeCitation.lastIndexOf("."),
+    beforeCitation.lastIndexOf("!"),
+    beforeCitation.lastIndexOf("?"),
+    beforeCitation.lastIndexOf("\n"),
+    beforeCitation.lastIndexOf("\r")
+  );
+  const afterCitation = text.slice(endIndex);
+  const sentenceEndOffsets = [".", "!", "?", "\n", "\r"]
+    .map((boundary) => afterCitation.indexOf(boundary))
+    .filter((offset) => offset >= 0);
+  const sentenceEnd = sentenceEndOffsets.length ? endIndex + Math.min(...sentenceEndOffsets) + 1 : text.length;
+  const snippet = normalizeSpaces(text.slice(sentenceStart + 1, sentenceEnd));
+  if (!snippet) return null;
+  return snippet.length > 480 ? `${snippet.slice(0, 477).trimEnd()}...` : snippet;
+}
+
+export function extractSpeciesResearchSources(
+  response: unknown,
+  context: SpeciesResearchDiscoveryContext
+): SpeciesResearchSource[] {
+  const defaultQuery =
+    context.query ?? `${normalizeSpaces(context.species)} seed germination dormancy propagation research`;
+  const searchQueriesByUrl = new Map<string, string>();
+  const candidates = new Map<string, WebSourceCandidate>();
+  const output = recordValue(response)?.output;
+  if (!Array.isArray(output)) return [];
+
+  const addSearchSource = (rawUrl: unknown, matchedQuery: string): void => {
+    const url = normalizedWebSourceUrl(rawUrl);
+    if (!url) return;
+    searchQueriesByUrl.set(url, matchedQuery);
+  };
+  const addCitation = (
+    rawUrl: unknown,
+    title: unknown,
+    text: unknown,
+    startIndex: unknown,
+    endIndex: unknown
+  ): void => {
+    const url = normalizedWebSourceUrl(rawUrl);
+    const snippet = citationSnippet(text, startIndex, endIndex);
+    if (!url || !snippet || typeof title !== "string" || !title.trim()) return;
+    const existing = candidates.get(url);
+    candidates.set(url, {
+      url,
+      title: title.trim(),
+      matchedQuery: searchQueriesByUrl.get(url) ?? existing?.matchedQuery ?? defaultQuery,
+      snippet: existing && existing.snippet.length >= snippet.length ? existing.snippet : snippet
+    });
+  };
+
+  for (const rawItem of output) {
+    const item = recordValue(rawItem);
+    if (!item) continue;
+    if (item.type === "web_search_call") {
+      const action = recordValue(item.action);
+      if (action?.type === "search") {
+        const queries = Array.isArray(action.queries)
+          ? action.queries.filter((query): query is string => typeof query === "string" && Boolean(query.trim()))
+          : [];
+        const matchedQuery = queries[0] ?? (typeof action.query === "string" ? action.query : defaultQuery);
+        if (Array.isArray(action.sources)) {
+          for (const rawSource of action.sources) {
+            addSearchSource(recordValue(rawSource)?.url, matchedQuery);
+          }
+        }
+      }
+    }
+    if (item.type !== "message" || !Array.isArray(item.content)) continue;
+    for (const rawContent of item.content) {
+      const content = recordValue(rawContent);
+      if (content?.type !== "output_text" || !Array.isArray(content.annotations)) continue;
+      for (const rawAnnotation of content.annotations) {
+        const annotation = recordValue(rawAnnotation);
+        if (annotation?.type !== "url_citation") continue;
+        addCitation(annotation.url, annotation.title, content.text, annotation.start_index, annotation.end_index);
+      }
+    }
+  }
+
+  const sources: SpeciesResearchSource[] = [];
+  for (const candidate of candidates.values()) {
+    const relevance = sourceRelevance(candidate.title, candidate.url, candidate.snippet, context);
+    if (!relevance) continue;
+    const yearMatch = candidate.title.match(/\b(?:18|19|20)\d{2}\b/);
+    const url = new URL(candidate.url);
+    sources.push({
+      id: `openai_web:${createHash("sha256").update(candidate.url).digest("hex").slice(0, 16)}`,
+      source: "openai_web",
+      title: candidate.title,
+      year: yearMatch ? Number(yearMatch[0]) : null,
+      venue: url.hostname,
+      url: candidate.url,
+      doi: url.hostname === "doi.org" ? candidate.url : null,
+      matchedQuery: candidate.matchedQuery,
+      relevance,
+      abstractSnippet: candidate.snippet
+    });
+    if (sources.length === 10) break;
+  }
+  return sources;
+}
 
 const EvidenceSchema = z
   .object({
@@ -394,8 +601,14 @@ interface SpeciesContext {
     treatment: string;
     treatmentComponents: TrialRecord["treatmentComponents"];
     pc: number | null;
+    pcRaw: number | null;
+    pcScale: TrialRecord["pcScale"];
     lpc: number | null;
+    lpcRaw: number | null;
+    lpcScale: TrialRecord["lpcScale"];
     fourPc: number | null;
+    fourPcRaw: number | null;
+    fourPcScale: TrialRecord["fourPcScale"];
     status: "D" | "ND" | null;
     notes: string | null;
   }>;
@@ -745,7 +958,7 @@ function noSourceResearchResult({
         : `${family.plantFamily} context was identified, but the workbook evidence still owns the treatment assessment.`,
     recommendedTechniques: [],
     protocolGaps: [
-      "No external literature service is used in this app path.",
+      "No external source claim survived source-ID and local-row citation validation.",
       "Treat local workbook treatment codes as local protocols unless the codebook defines temperature, duration, substrate, moisture, and light conditions."
     ],
     nextTrialDesign:
@@ -783,8 +996,14 @@ function localResearchPayload(importResult: ImportResult, context: SpeciesContex
       treatment: trial.treatment,
       treatmentComponents: trial.treatmentComponents,
       pc: trial.pc,
+      pcRaw: trial.pcRaw ?? trial.pc,
+      pcScale: trial.pcScale ?? null,
       lpc: trial.lpc,
+      lpcRaw: trial.lpcRaw ?? trial.lpc,
+      lpcScale: trial.lpcScale ?? null,
       fourPc: trial.fourPc,
+      fourPcRaw: trial.fourPcRaw ?? trial.fourPc,
+      fourPcScale: trial.fourPcScale ?? null,
       status: trial.status
     }));
 
@@ -813,11 +1032,11 @@ function hydrateResearchTechniques(
     );
     const localRows = [...new Set(recommendation.localRows.filter((row) => allowedRows.has(row)))];
     const sourceIds = [...new Set(recommendation.sourceIds.filter((sourceId) => allowedSourceIds.has(sourceId)))];
+    if (!localRows.length) continue;
     const evidenceLevel =
       !sourceIds.length && localRows.length && recommendation.evidenceLevel !== "local_species"
         ? "local_species"
         : recommendation.evidenceLevel;
-    if (evidenceLevel === "local_species" && !localRows.length) continue;
     if (evidenceLevel === "mixed" && (!localRows.length || !sourceIds.length)) continue;
     if (
       ["species_literature", "genus_background", "family_background"].includes(evidenceLevel) &&
@@ -878,8 +1097,14 @@ export function buildSpeciesInsightContexts(result: ImportResult): SpeciesContex
             treatment: trial.treatment,
             treatmentComponents: trial.treatmentComponents,
             pc: trial.pc,
+            pcRaw: trial.pcRaw ?? trial.pc,
+            pcScale: trial.pcScale ?? null,
             lpc: trial.lpc,
+            lpcRaw: trial.lpcRaw ?? trial.lpc,
+            lpcScale: trial.lpcScale ?? null,
             fourPc: trial.fourPc,
+            fourPcRaw: trial.fourPcRaw ?? trial.fourPc,
+            fourPcScale: trial.fourPcScale ?? null,
             status: trial.status,
             notes: trial.notes
           })),
@@ -1043,7 +1268,12 @@ export function parseSpeciesResearchResponse({
     recommendedTechniques,
     protocolGaps: parsed.protocolGaps,
     nextTrialDesign: parsed.nextTrialDesign,
-    caveats: parsed.caveats,
+    caveats: sources.length
+      ? parsed.caveats
+      : [
+          ...parsed.caveats.slice(0, 5),
+          "Web discovery returned no vetted source, so these technique candidates rely only on cited local workbook rows."
+        ],
     evidenceNotes: parsed.evidenceNotes,
     localEvidence: localEvidenceForResearch(context),
     sources,
@@ -1081,6 +1311,34 @@ export function parseHeaderMappingResponse(responseText: string, profile: Workbo
   return aliases;
 }
 
+export async function discoverSpeciesResearchSources({
+  apiKey,
+  species,
+  taxonomy,
+  family = null
+}: {
+  apiKey: string;
+  species: string;
+  taxonomy: SpeciesTaxonomyMatch | null;
+  family?: string | null;
+}): Promise<SpeciesResearchSource[]> {
+  const query = `${normalizeSpaces(species)} seed germination dormancy propagation research`;
+  const client = openAiClient(apiKey, 60_000, 0);
+  const response = await client.responses.create({
+    model: OPENAI_MINI_MODEL,
+    instructions:
+      "You must perform a web search. Find authoritative, directly relevant sources for seed germination, dormancy, propagation, or closely related genus/family methods for the requested taxon. Prefer primary literature, government, university, botanical garden, and seed-bank sources. Avoid generic homepages, search-result pages, commercial summaries, and sources that do not support a propagation claim. Give a concise research note in which every factual source claim is immediately backed by a URL citation, and name the relevant species, genus, or family in the cited sentence so the application can vet what each link supports.",
+    input: JSON.stringify({ species, family, taxonomy, query }),
+    reasoning: { effort: "low" },
+    max_output_tokens: 3000,
+    store: false,
+    tools: [{ type: "web_search", search_context_size: "medium" }],
+    tool_choice: "auto",
+    include: ["web_search_call.action.sources"]
+  });
+  return extractSpeciesResearchSources(response, { species, taxonomy, family, query });
+}
+
 export async function generateSpeciesInsights({
   apiKey,
   importResult,
@@ -1093,7 +1351,7 @@ export async function generateSpeciesInsights({
   const contexts = buildSpeciesInsightContexts(importResult);
   if (!contexts.length) return [];
 
-  const client = new OpenAI({ apiKey });
+  const client = openAiClient(apiKey);
   const generatedAt = new Date().toISOString();
   const response = await client.responses.create({
     model: OPENAI_INSIGHT_MODEL,
@@ -1140,71 +1398,86 @@ export async function generateSpeciesResearch({
   if (!context) throw new Error(`No local trial rows found for ${species}.`);
   const generatedAt = new Date().toISOString();
 
-  const client = new OpenAI({ apiKey });
+  const client = openAiClient(apiKey);
   const instructions =
-    "You are a senior seed-bank propagation scientist advising researchers who need to get difficult native seeds to germinate faster without overclaiming. Produce a protocol-oriented research assessment for the selected species using the provided local workbook evidence and taxonomy context. Good output helps design the next experiment: it separates germination from seedling/production success, names the exact workbook treatment code being evaluated, and states controls, replication needs, success criteria, failure criteria, and risk checks such as viability/fill, contamination, abnormal seedlings, unequal seed numbers, incomplete ND outcomes, and rescue/converted treatments. Do not invent operational details. If CS, WS, GA, smoke, substrate, light, temperature, moisture, or duration are not defined in the payload, say to repeat the local code exactly and list the missing protocol fields as protocolGaps. Recommendations must be based on local_species evidence and cite localRows from the selected species payload; sourceIds should be empty unless sources are explicitly provided. Do not present general family or genus knowledge as a verified protocol. You may use family/taxonomy context only to frame hypotheses and caveats, while keeping treatment recommendations grounded in the workbook rows. Preserve deterministic confidence labels exactly; never upgrade them and never hide caveats. Always produce useful local_species technique candidates from the workbook rows unless the local workbook evidence itself is unusable.";
+    "You are a senior seed-bank propagation scientist advising researchers who need to get difficult native seeds to germinate faster without overclaiming. Produce a protocol-oriented research assessment for the selected species using the provided local workbook evidence, taxonomy context, and vetted web sources. Good output helps design the next experiment: it separates germination from seedling/production success, names the exact workbook treatment code being evaluated, and states controls, replication needs, success criteria, failure criteria, and risk checks such as viability/fill, contamination, abnormal seedlings, unequal seed numbers, incomplete ND outcomes, and rescue/converted treatments. The pc, lpc, and fourPc fields are normalized 0-5 analysis values. Always inspect pcRaw/pcScale, lpcRaw/lpcScale, and fourPcRaw/fourPcScale: when a scale is percent_0_100, its Raw field is the exact percentage and the normalized value is only its 0-5 class; never report the normalized class as the raw observation. When scale metadata is missing or invalid, do not infer an exact percentage. Do not invent operational details. If CS, WS, GA, smoke, substrate, light, temperature, moisture, or duration are not defined in the payload, say to repeat the local code exactly and list the missing protocol fields as protocolGaps. Every technique must cite one or more localRows from the selected species payload as its local relevance anchor. Every literature-backed claim or technique must also cite one or more exact sourceIds from vettedSources; never invent a source ID. Do not present general family or genus knowledge as a verified protocol. Preserve deterministic confidence labels exactly; never upgrade them and never hide caveats. If vettedSources is empty, useful local_species technique candidates may still be returned, but explicitly caveat that no external source was available. Always produce useful local_species technique candidates from the workbook rows unless the local workbook evidence itself is unusable.";
   const input = JSON.stringify({
     batch: dashboard.batch,
     dataQualityIssues: dashboard.dataQualityIssues,
     taxonomy,
     localEvidence: localResearchPayload(importResult, context, taxonomy),
-    manualSources: sources
+    vettedSources: sources
   });
-  const attempts = [
-    { maxOutputTokens: 7000, instructions },
-    {
-      maxOutputTokens: 9000,
-      instructions: `${instructions} Retry requirement: return concise, complete JSON. Keep the assessment practical; prefer two or three high-value local_species techniques over exhaustive wording.`
-    }
-  ];
-  let lastError: unknown = null;
-
-  for (const attempt of attempts) {
-    try {
-      const response = await client.responses.create({
-        model: OPENAI_INSIGHT_MODEL,
-        instructions: attempt.instructions,
-        input,
-        reasoning: { effort: "medium" },
-        max_output_tokens: attempt.maxOutputTokens,
-        store: false,
-        text: {
-          format: {
-            type: "json_schema",
-            name: "seedbank_species_research",
-            description: "Local workbook germination research assessment for one selected species.",
-            strict: true,
-            schema: SPECIES_RESEARCH_JSON_SCHEMA
-          }
+  const requestSynthesis = async (model: string, retry: boolean): Promise<string> => {
+    const response = await client.responses.create({
+      model,
+      instructions: retry
+        ? `${instructions} Retry requirement: return concise, complete JSON. Keep the assessment practical; prefer two or three high-value techniques over exhaustive wording.`
+        : instructions,
+      input,
+      reasoning: { effort: "medium" },
+      max_output_tokens: retry ? 9000 : 7000,
+      store: false,
+      text: {
+        format: {
+          type: "json_schema",
+          name: "seedbank_species_research",
+          description: "Source-backed germination research assessment for one selected species.",
+          strict: true,
+          schema: SPECIES_RESEARCH_JSON_SCHEMA
         }
-      });
+      }
+    });
+    return response.output_text;
+  };
 
-      const result = parseSpeciesResearchResponse({
-        responseText: response.output_text,
-        species,
-        context,
-        taxonomy,
-        sources,
-        model: OPENAI_INSIGHT_MODEL,
-        generatedAt
-      });
-      if (result.status === "ready") return result;
-      throw new Error("No valid local-species row-cited techniques generated on this attempt.");
-    } catch (error) {
-      lastError = error;
-      console.warn(
-        `OpenAI species research synthesis attempt failed: ${error instanceof Error ? error.message : String(error)}`
-      );
-    }
+  let responseText: string;
+  try {
+    responseText = await requestSynthesis(OPENAI_INSIGHT_MODEL, false);
+  } catch {
+    return noSourceResearchResult({
+      species,
+      context,
+      taxonomy,
+      generatedAt,
+      sources,
+      model: null,
+      reason:
+        "OpenAI synthesis was unavailable, so the app is showing local evidence without generated technique advice."
+    });
   }
 
-  if (lastError) {
-    console.warn(
-      `OpenAI species research synthesis failed validation after retry: ${
-        lastError instanceof Error ? lastError.message : String(lastError)
-      }`
-    );
+  try {
+    const result = parseSpeciesResearchResponse({
+      responseText,
+      species,
+      context,
+      taxonomy,
+      sources,
+      model: OPENAI_INSIGHT_MODEL,
+      generatedAt
+    });
+    if (result.status === "ready") return result;
+  } catch {
+    // A malformed or invalid structured synthesis gets one higher-capability retry below.
   }
+
+  try {
+    const retryText = await requestSynthesis(OPENAI_RESEARCH_RETRY_MODEL, true);
+    const result = parseSpeciesResearchResponse({
+      responseText: retryText,
+      species,
+      context,
+      taxonomy,
+      sources,
+      model: OPENAI_RESEARCH_RETRY_MODEL,
+      generatedAt
+    });
+    if (result.status === "ready") return result;
+  } catch {
+    // The deterministic fallback below intentionally omits unvalidated model narrative.
+  }
+
   return noSourceResearchResult({
     species,
     context,
@@ -1232,10 +1505,10 @@ export async function answerSpreadsheetQuestion({
       .map((trial) => trial.sourceRow)
       .filter((row): row is number => typeof row === "number")
   );
-  const client = new OpenAI({ apiKey });
+  const client = openAiClient(apiKey);
   const createdAt = new Date().toISOString();
   const response = await client.responses.create({
-    model: OPENAI_INSIGHT_MODEL,
+    model: OPENAI_MINI_MODEL,
     instructions:
       "You are a botanist and seed-bank scientist with decades of propagation experience. Answer the user's question using only the provided SeedBank Insights payload. Preserve deterministic confidence labels exactly. If the evidence is underpowered, say so plainly. Cite source rows only when they are present in the payload.",
       input: JSON.stringify({ question, context }),
@@ -1255,7 +1528,7 @@ export async function answerSpreadsheetQuestion({
   return parseAskAnswerResponse(
     response.output_text,
     allowedRows,
-    OPENAI_INSIGHT_MODEL,
+    OPENAI_MINI_MODEL,
     createdAt,
     maxConfidenceFromContext(context)
   );
@@ -1269,9 +1542,9 @@ export async function suggestHeaderAliases({
   profile: WorkbookHeaderProfile;
 }): Promise<Record<string, string>> {
   if (!profile.missingHeaders.length) return {};
-  const client = new OpenAI({ apiKey });
+  const client = openAiClient(apiKey);
   const response = await client.responses.create({
-    model: OPENAI_INSIGHT_MODEL,
+    model: OPENAI_MINI_MODEL,
     instructions:
       "Map spreadsheet headers to the requested SeedBank canonical headers. Return only mappings you are confident about. Do not invent headers that are not present.",
     input: JSON.stringify({

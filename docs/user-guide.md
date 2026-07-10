@@ -89,7 +89,7 @@ Open Settings and enter an OpenAI API key. The key is stored through Electron sa
 
 When configured, OpenAI can help with:
 
-- species insight prose
+- source-backed species and family germination research
 - bounded Ask responses
 - fallback header aliases for ambiguous imports
 

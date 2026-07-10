@@ -178,6 +178,12 @@ function SpeciesExplorer({
   }, [dashboard.speciesSummaries]);
   const firstSpecies = speciesOptions[0]?.species ?? "";
   const [selectedSpecies, setSelectedSpecies] = useState(firstSpecies);
+  const [speciesFilter, setSpeciesFilter] = useState("");
+  const filteredSpeciesOptions = useMemo(() => {
+    const query = speciesFilter.trim().toLocaleLowerCase();
+    if (!query) return speciesOptions;
+    return speciesOptions.filter((option) => option.species.toLocaleLowerCase().includes(query));
+  }, [speciesFilter, speciesOptions]);
   const emptyTitle = !hasBatch
     ? "Import a workbook before researching species."
     : !aiConfigured
@@ -203,25 +209,46 @@ function SpeciesExplorer({
   const selectedResearch = researchResults[activeResearchKey];
   const selectedResearchError = researchErrors[activeResearchKey];
   const isResearching = researchingSpecies === activeSpecies;
-  const canResearch = hasBatch && Boolean(activeSpecies) && !actionDisabled && !isResearching;
+  const cachedResearchAvailable = hasCacheStatus && !cacheMissingSpecies.has(activeSpecies);
+  const canResearch =
+    hasBatch &&
+    Boolean(activeSpecies) &&
+    !actionDisabled &&
+    !isResearching &&
+    (aiConfigured || Boolean(selectedResearch) || cachedResearchAvailable);
 
   useEffect(() => {
     if (!hasBatch || !activeSpecies || selectedResearch || selectedResearchError || isResearching) return;
+    if (!aiConfigured && !cachedResearchAvailable) return;
     onResearchSpecies(activeSpecies, false);
-  }, [activeSpecies, hasBatch, isResearching, onResearchSpecies, selectedResearch, selectedResearchError]);
+  }, [
+    activeSpecies,
+    aiConfigured,
+    cacheMissingSpecies,
+    hasBatch,
+    hasCacheStatus,
+    isResearching,
+    onResearchSpecies,
+    selectedResearch,
+    selectedResearchError
+  ]);
 
   return (
     <section className="view-stack">
       <section className="panel species-workbench-panel">
         <div className="panel-heading">
           <div>
-            <h2>AI Species Assessment</h2>
+            <h2>AI Research Assessment</h2>
             <p>{dashboard.aiInsightStatus.message}</p>
           </div>
           <div className="species-actions">
             <AiStatusPill dashboard={dashboard} />
             {hasBatch ? (
-              <button type="button" onClick={() => onResearchSpecies(activeSpecies, true)} disabled={!canResearch}>
+              <button
+                type="button"
+                onClick={() => onResearchSpecies(activeSpecies, aiConfigured)}
+                disabled={!canResearch}
+              >
                 <RefreshCw size={16} />
                 {isResearching
                   ? "Researching..."
@@ -239,24 +266,42 @@ function SpeciesExplorer({
 
         {speciesOptions.length ? (
           <div className="species-workbench">
-            <div className="species-selector" role="listbox" aria-label="Species">
-              {speciesOptions.map((option) => (
-                <button
-                  type="button"
-                  className={option.species === activeSpecies ? "active" : ""}
-                  key={option.species}
-                  onClick={() => setSelectedSpecies(option.species)}
-                >
-                  <span>{option.species}</span>
-                  <small>
-                    {option.summary?.rows ?? 0} rows
-                    {researchResults[researchKey(dashboard.batch?.id, option.species)] ||
-                    (hasCacheStatus && !cacheMissingSpecies.has(option.species))
-                      ? " · researched"
-                      : ""}
-                  </small>
-                </button>
-              ))}
+            <div className="species-selector-column">
+              <label className="species-filter">
+                <Search size={16} aria-hidden="true" />
+                <input
+                  type="search"
+                  aria-label="Filter species"
+                  placeholder="Filter species"
+                  value={speciesFilter}
+                  onChange={(event) => setSpeciesFilter(event.target.value)}
+                />
+              </label>
+              <nav className="species-selector" aria-label="Species">
+                {filteredSpeciesOptions.map((option) => (
+                  <button
+                    type="button"
+                    aria-pressed={option.species === activeSpecies}
+                    className={option.species === activeSpecies ? "active" : ""}
+                    key={option.species}
+                    onClick={() => setSelectedSpecies(option.species)}
+                  >
+                    <span>{option.species}</span>
+                    <small>
+                      {option.summary?.rows ?? 0} rows
+                      {researchResults[researchKey(dashboard.batch?.id, option.species)] ||
+                      (hasCacheStatus && !cacheMissingSpecies.has(option.species))
+                        ? " · researched"
+                        : ""}
+                    </small>
+                  </button>
+                ))}
+                {!filteredSpeciesOptions.length ? (
+                  <p className="species-filter-empty" role="status">
+                    No species match this filter.
+                  </p>
+                ) : null}
+              </nav>
             </div>
 
             <article className="species-detail">
@@ -271,11 +316,11 @@ function SpeciesExplorer({
                 <section className="species-research-state">
                   <RefreshCw className="spin" size={22} />
                   <div>
-                    <h4>{aiConfigured ? "Researching germination evidence" : "Loading cached AI research"}</h4>
+                    <h4>{aiConfigured ? "Running source-backed germination research" : "Loading cached source-backed research"}</h4>
                     <p>
                       {aiConfigured
-                        ? "Checking taxonomy context and asking OpenAI to synthesize workbook-backed protocol guidance."
-                        : "Looking for a shareable cached response for this species."}
+                        ? "Searching web sources, checking taxonomy context, and connecting findings to workbook rows."
+                        : "Looking for a cached source-backed assessment for this species."}
                     </p>
                   </div>
                 </section>
@@ -315,7 +360,7 @@ function SpeciesExplorer({
                   ) : null}
 
                   <section className="species-detail-section technique-section">
-                    <h4>Workbook-backed technique candidates</h4>
+                    <h4>Research-backed technique candidates</h4>
                     {selectedResearch.recommendedTechniques.length ? (
                       <div className="technique-grid">
                         {selectedResearch.recommendedTechniques.map((recommendation) => (
@@ -398,7 +443,7 @@ function SpeciesExplorer({
                     <section className="species-detail-section research-sources">
                       <div className="resource-heading">
                         <h4>Reference sources used</h4>
-                        <span>Optional reference context only; workbook rows own the recommendation.</span>
+                        <span>Sources cited in this assessment; workbook rows own deterministic evidence tiers.</span>
                       </div>
                       <div className="species-resource-grid">
                         {selectedResearch.sources.map((source) => (
@@ -439,7 +484,7 @@ function SpeciesExplorer({
                   <BrainCircuit size={22} />
                   <div>
                     <h4>Ready to research this species</h4>
-                    <p>The app will check taxonomy context and synthesize workbook-backed trial guidance.</p>
+                    <p>The app will search web sources, check taxonomy context, and connect findings to workbook rows.</p>
                   </div>
                 </section>
               )}
@@ -722,11 +767,6 @@ function App() {
           } still need cached research.`
         : "All imported species have cached AI research for the demo."
       : "Run species-level AI research with local row evidence, family context, caveats, and next-trial design.";
-  const qualitySeverityCounts = dashboard.dataQualityIssues.reduce(
-    (counts, issue) => ({ ...counts, [issue.severity]: counts[issue.severity] + 1 }),
-    { high: 0, medium: 0, low: 0 }
-  );
-
   const metricCards = useMemo(
     () => [
       {
@@ -840,7 +880,11 @@ function App() {
         delete next[key];
         return next;
       });
-      setMessage(force ? `Refreshing germination research for ${species}...` : `Researching germination evidence for ${species}...`);
+      setMessage(
+        force
+          ? `Refreshing source-backed germination research for ${species}...`
+          : `Running source-backed germination research for ${species}...`
+      );
       try {
         const result = await window.seedbank.researchSpecies(requestedBatchId, species, force);
         if (activeBatchIdRef.current !== requestedBatchId) {
@@ -925,7 +969,7 @@ function App() {
   const overview = (
     <section className="overview-grid">
       <article className="overview-card">
-        <span>Best paired signal</span>
+        <span>Best analyzed paired comparison</span>
         <strong>
           {bestComparison
             ? `${bestComparison.treatment} vs ${bestComparison.baseline}`
@@ -986,6 +1030,7 @@ function App() {
             return (
               <button
                 className={selectedNav === item.label ? "active" : ""}
+                aria-current={selectedNav === item.label ? "page" : undefined}
                 key={item.label}
                 type="button"
                 onClick={() => setSelectedNav(item.label)}
@@ -1085,25 +1130,8 @@ function App() {
         )}
 
         {selectedNav === "Data Quality" && (
-          <section className="view-grid two-column">
+          <section className="view-stack">
             <DataQualityPanel issues={dashboard.dataQualityIssues} comparisons={dashboard.pairedComparisons} />
-            <section className="panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>Review priorities</h2>
-                  <p>Use this as a triage summary before editing the workbook.</p>
-                </div>
-              </div>
-              <div className="quality-summary-list">
-                <span>High priority: {qualitySeverityCounts.high}</span>
-                <span>Medium priority: {qualitySeverityCounts.medium}</span>
-                <span>Low priority: {qualitySeverityCounts.low}</span>
-                <span>Trial rows: {dashboard.metrics.trials}</span>
-                <span>Species: {dashboard.metrics.species}</span>
-                <span>Parsed observations: {dashboard.metrics.observationsExtracted}</span>
-                <span>Done rate: {donePercent}%</span>
-              </div>
-            </section>
           </section>
         )}
 

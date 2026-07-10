@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { buildDashboardData } from "../../src/core/insights";
-import { buildTrialQueue, pairedComparison, qualityIssues, summarizeTreatments } from "../../src/core/statistics";
+import {
+  buildDefaultComparisons,
+  buildTrialQueue,
+  pairedComparison,
+  qualityIssues,
+  summarizeTreatments
+} from "../../src/core/statistics";
 import { parseTreatment } from "../../src/core/treatments";
 import type { TrialRecord } from "../../src/core/types";
 
@@ -76,7 +82,33 @@ describe("pairedComparison", () => {
     ]).flat();
     const comparison = pairedComparison(trials, "C", "CS");
     expect(comparison.confidence).toBe("Strong signal");
+    expect(comparison.speciesCount).toBe(12);
     expect(comparison.additionalTrialsNeeded).toBe(0);
+    expect(comparison.replicationTargetBasis).toMatch(/not a statistical power estimate/i);
+  });
+
+  it("does not call repeated accessions from one species a strong signal", () => {
+    const trials = Array.from({ length: 12 }, (_, index) => [
+      trial(`P${index}`, "Species one", "C", 1),
+      trial(`P${index}`, "Species one", "CS", 4)
+    ]).flat();
+    const comparison = pairedComparison(trials, "C", "CS");
+    expect(comparison.n).toBe(12);
+    expect(comparison.speciesCount).toBe(1);
+    expect(comparison.confidence).not.toBe("Strong signal");
+  });
+
+  it("discovers treatment pairs from the workbook instead of a hard-coded shortlist", () => {
+    const trials = [
+      trial("P1", "Species one", "C", 1),
+      trial("P1", "Species one", "SMOKE", 4),
+      trial("P2", "Species two", "C", 2),
+      trial("P2", "Species two", "SMOKE", 5)
+    ];
+    const comparisons = buildDefaultComparisons(trials);
+    expect(comparisons).toEqual(
+      expect.arrayContaining([expect.objectContaining({ baseline: "C", treatment: "SMOKE", n: 2 })])
+    );
   });
 
   it("averages duplicate treatment rows before paired comparison", () => {
@@ -118,14 +150,27 @@ describe("pairedComparison", () => {
 
     expect(queue.map((item) => item.nextStep)).toEqual(
       expect.arrayContaining([
-        "Record PC score for row 11.",
-        "Resolve ND follow-up for promising row 12.",
-        "Set D/ND status for row 13.",
-        "Review notes for row 14."
+        "Record a PC score or confirm that the trial remains active.",
+        "Resolve the ND follow-up and record the settled outcome.",
+        "Set D/ND status for the affected row.",
+        "Review notes for counts, rescue handling, and protocol detail."
       ])
     );
     expect(new Set(queue.map((item) => item.blockedMetric))).toEqual(new Set(["PC", "D|ND", "Notes"]));
     expect(queue[0].priority).toBe("high");
+  });
+
+  it("uses the latest recorded lifecycle date as queue reference context", () => {
+    const queue = buildTrialQueue([
+      trial("P1", "Species one", "CS", 5, {
+        sourceRow: 15,
+        status: "ND",
+        startDate: "2025-01-01",
+        ttd: "2025-03-01",
+        linerStart: "2025-04-15"
+      })
+    ]);
+    expect(queue[0].nextDate).toBe("2025-04-15");
   });
 
   it("builds actionable data-quality issues with row and species targets", () => {

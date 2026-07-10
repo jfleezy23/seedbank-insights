@@ -22,6 +22,7 @@ Renderer action
   -> preload IPC wrapper
   -> electron/main/main.ts
   -> electron/main/openai-insights.ts
+  -> OpenAI web-search source discovery
   -> validated structured response
   -> deterministic confidence/evidence enforcement
   -> DashboardData back to renderer
@@ -70,7 +71,7 @@ Electron main owns privileged behavior:
 - `src/core/statistics.ts`: deterministic statistical helpers.
 - `src/core/insights.ts`: dashboard summaries, paired comparisons, trial queue, data-quality synthesis.
 - `electron/main/database.ts`: SQLite schema and import-batch persistence.
-- `electron/main/openai-insights.ts`: structured OpenAI prompts, schema validation, confidence enforcement.
+- `electron/main/openai-insights.ts`: web-source discovery, structured OpenAI prompts, model routing, schema validation, and confidence enforcement.
 
 ## Persistence Model
 
@@ -87,7 +88,7 @@ This makes it possible to:
 
 Startup should show the splash first, then initialize risky paths. If SQLite/native module initialization fails, the app should show an explicit launch-error surface instead of a blank window.
 
-OpenAI failures should degrade to deterministic behavior where possible. Deterministic imports and dashboard calculations must not depend on live AI availability.
+OpenAI failures should degrade to deterministic behavior where possible. Deterministic imports and dashboard calculations must not depend on live AI availability. Species research uses a lower-cost discovery model before synthesis and retains only validated, clickable source URLs.
 
 ## Test Strategy
 

@@ -19,15 +19,21 @@ function trial(row, treatment, pc) {
     propaguleType: "s",
     ttd: "2026-03-16",
     pc,
+    pcRaw: pc === 5 ? 90 : pc,
+    pcScale: pc === 5 ? "percent_0_100" : "ordinal_0_5",
     ced: null,
     wsed: null,
     csed: null,
     linerStart: null,
     linerTtd: null,
     lpc: null,
+    lpcRaw: null,
+    lpcScale: null,
     fourStart: null,
     fourTtd: null,
     fourPc: null,
+    fourPcRaw: null,
+    fourPcScale: null,
     location: null,
     status: "D",
     pcd: null,
@@ -63,10 +69,15 @@ function importResult(filename) {
     ],
     issues: [
       {
+        id: "synthetic-import-issue",
         severity: "high",
+        category: "fix_first",
         title: "Synthetic import issue",
         detail: "Import-time issues must survive persistence.",
-        affectedRows: 1
+        affectedRows: 1,
+        sourceRows: [3],
+        species: ["Lomatium macrocarpum"],
+        metric: "PC"
       }
     ]
   };
@@ -92,6 +103,12 @@ try {
   if (reconstructed.trials.length !== 2) throw new Error("Reconstructed trial count changed");
   if (reconstructed.observations.length !== 1) throw new Error("Reconstructed observation count changed");
   if (reconstructed.issues.length !== 1) throw new Error("Reconstructed import issue count changed");
+  if (reconstructed.trials[1].pcRaw !== 90 || reconstructed.trials[1].pcScale !== "percent_0_100") {
+    throw new Error("Raw propagation score provenance did not survive persistence");
+  }
+  if (reconstructed.issues[0].sourceRows?.[0] !== 3 || reconstructed.issues[0].metric !== "PC") {
+    throw new Error("Actionable data-quality metadata did not survive persistence");
+  }
   if (reconstructed.batch.warnings[0] !== "Synthetic warning") {
     throw new Error("Reconstructed batch warnings changed");
   }
@@ -121,6 +138,14 @@ try {
     FROM observations;
     DROP TABLE observations;
     ALTER TABLE observations_legacy RENAME TO observations;
+    UPDATE trials SET pc = 50 WHERE source_row = 3;
+    ALTER TABLE trials DROP COLUMN pc_raw;
+    ALTER TABLE trials DROP COLUMN pc_scale;
+    ALTER TABLE trials DROP COLUMN lpc_raw;
+    ALTER TABLE trials DROP COLUMN lpc_scale;
+    ALTER TABLE trials DROP COLUMN four_pc_raw;
+    ALTER TABLE trials DROP COLUMN four_pc_scale;
+    ALTER TABLE data_quality_issues DROP COLUMN metadata_json;
     PRAGMA user_version = 1;
   `);
   rawLegacy.close();
@@ -130,6 +155,10 @@ try {
   if (!migratedImport) throw new Error("Expected migrated legacy import result");
   if (migratedImport.observations.length !== 1) {
     throw new Error("Legacy observation import_batch_id migration did not preserve observations");
+  }
+  const migratedScore = migratedImport.trials.find((item) => item.sourceRow === 3);
+  if (migratedScore?.pc !== 3 || migratedScore.pcRaw !== 50 || migratedScore.pcScale !== "percent_0_100") {
+    throw new Error("Legacy percentage score migration did not preserve and normalize the raw value");
   }
   migratedLegacy.close();
 

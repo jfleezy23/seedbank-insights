@@ -44,7 +44,7 @@ Required checks should include the main CI workflow once it is green on GitHub.
 
 ## Data And AI Guardrails
 
-- `PC`, `LPC`, and `4PC` are ordinal 0-5 scores unless exact extracted counts exist.
+- Raw `PC`, `LPC`, and `4PC` values and scale metadata are preserved; exact 0-100 percentages are normalized explicitly for ordinal analysis.
 - Paired accession/species comparisons are preferred over raw treatment averages.
 - AI summaries must preserve deterministic confidence labels and cite row evidence.
 - Header mapping may use AI only as a fallback after deterministic matching.

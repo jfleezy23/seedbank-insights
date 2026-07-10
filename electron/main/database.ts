@@ -100,15 +100,21 @@ function trialFromRow(row: Record<string, unknown>): TrialRecord {
     propaguleType: nullableText(row.propagule_type),
     ttd: nullableText(row.ttd),
     pc: numberOrNull(row.pc),
+    pcRaw: numberOrNull(row.pc_raw),
+    pcScale: nullableText(row.pc_scale) as TrialRecord["pcScale"],
     ced: nullableText(row.ced),
     wsed: nullableText(row.wsed),
     csed: nullableText(row.csed),
     linerStart: nullableText(row.liner_start),
     linerTtd: nullableText(row.liner_ttd),
     lpc: numberOrNull(row.lpc),
+    lpcRaw: numberOrNull(row.lpc_raw),
+    lpcScale: nullableText(row.lpc_scale) as TrialRecord["lpcScale"],
     fourStart: nullableText(row.four_start),
     fourTtd: nullableText(row.four_ttd),
     fourPc: numberOrNull(row.four_pc),
+    fourPcRaw: numberOrNull(row.four_pc_raw),
+    fourPcScale: nullableText(row.four_pc_scale) as TrialRecord["fourPcScale"],
     location: nullableText(row.location),
     status: nullableText(row.status) as "D" | "ND" | null,
     pcd: nullableText(row.pcd),
@@ -143,7 +149,9 @@ function observationFromRow(row: Record<string, unknown>): ParsedObservation {
 }
 
 function issueFromRow(row: Record<string, unknown>): DataQualityIssue {
+  const metadata = parseJson<Partial<DataQualityIssue>>(row.metadata_json, {});
   return {
+    ...metadata,
     severity: row.severity as DataQualityIssue["severity"],
     title: textValue(row.title),
     detail: textValue(row.detail),
@@ -208,15 +216,21 @@ export class SeedBankDatabase {
         propagule_type TEXT,
         ttd TEXT,
         pc REAL,
+        pc_raw REAL,
+        pc_scale TEXT,
         ced TEXT,
         wsed TEXT,
         csed TEXT,
         liner_start TEXT,
         liner_ttd TEXT,
         lpc REAL,
+        lpc_raw REAL,
+        lpc_scale TEXT,
         four_start TEXT,
         four_ttd TEXT,
         four_pc REAL,
+        four_pc_raw REAL,
+        four_pc_scale TEXT,
         location TEXT,
         status TEXT,
         pcd TEXT,
@@ -247,6 +261,7 @@ export class SeedBankDatabase {
         title TEXT NOT NULL,
         detail TEXT NOT NULL,
         affected_rows INTEGER NOT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{}',
         FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
       );
 
@@ -263,6 +278,8 @@ export class SeedBankDatabase {
     `);
     this.ensureObservationImportBatchId();
     this.ensureTrialFamilyColumn();
+    this.ensureTrialScoreColumns();
+    this.ensureDataQualityMetadataColumn();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_observations_import_batch_id
         ON observations(import_batch_id);
@@ -291,6 +308,75 @@ export class SeedBankDatabase {
     const columns = this.db.prepare("PRAGMA table_info(trials)").all() as Array<{ name: string }>;
     if (columns.some((column) => column.name === "family")) return;
     this.db.exec("ALTER TABLE trials ADD COLUMN family TEXT;");
+  }
+
+  private ensureTrialScoreColumns(): void {
+    const columns = new Set(
+      (this.db.prepare("PRAGMA table_info(trials)").all() as Array<{ name: string }>).map((column) => column.name)
+    );
+    const additions = [
+      ["pc_raw", "REAL"],
+      ["pc_scale", "TEXT"],
+      ["lpc_raw", "REAL"],
+      ["lpc_scale", "TEXT"],
+      ["four_pc_raw", "REAL"],
+      ["four_pc_scale", "TEXT"]
+    ] as const;
+    for (const [name, type] of additions) {
+      if (!columns.has(name)) this.db.exec(`ALTER TABLE trials ADD COLUMN ${name} ${type};`);
+    }
+    for (const [valueColumn, rawColumn, scaleColumn] of [
+      ["pc", "pc_raw", "pc_scale"],
+      ["lpc", "lpc_raw", "lpc_scale"],
+      ["four_pc", "four_pc_raw", "four_pc_scale"]
+    ] as const) {
+      this.db.exec(`
+        UPDATE trials
+        SET ${rawColumn} = ${valueColumn}
+        WHERE ${rawColumn} IS NULL AND ${valueColumn} IS NOT NULL;
+
+        UPDATE trials
+        SET ${scaleColumn} = 'invalid'
+        WHERE ${scaleColumn} IS NULL
+          AND ${rawColumn} IS NOT NULL
+          AND (${rawColumn} < 0 OR ${rawColumn} > 100);
+
+        UPDATE trials
+        SET ${scaleColumn} = 'percent_0_100'
+        WHERE ${scaleColumn} IS NULL
+          AND ${rawColumn} BETWEEN 0 AND 100
+          AND EXISTS (
+            SELECT 1
+            FROM trials percentage_row
+            WHERE percentage_row.import_batch_id = trials.import_batch_id
+              AND percentage_row.${rawColumn} > 5
+              AND percentage_row.${rawColumn} <= 100
+          );
+
+        UPDATE trials
+        SET ${scaleColumn} = 'ordinal_0_5'
+        WHERE ${scaleColumn} IS NULL AND ${rawColumn} BETWEEN 0 AND 5;
+
+        UPDATE trials
+        SET ${valueColumn} = CASE
+          WHEN ${scaleColumn} = 'invalid' THEN NULL
+          WHEN ${scaleColumn} = 'percent_0_100' AND ${rawColumn} = 0 THEN 0
+          WHEN ${scaleColumn} = 'percent_0_100' AND ${rawColumn} <= 10 THEN 1
+          WHEN ${scaleColumn} = 'percent_0_100' AND ${rawColumn} <= 25 THEN 2
+          WHEN ${scaleColumn} = 'percent_0_100' AND ${rawColumn} <= 50 THEN 3
+          WHEN ${scaleColumn} = 'percent_0_100' AND ${rawColumn} <= 75 THEN 4
+          WHEN ${scaleColumn} = 'percent_0_100' THEN 5
+          ELSE ${valueColumn}
+        END
+        WHERE ${scaleColumn} IN ('invalid', 'percent_0_100');
+      `);
+    }
+  }
+
+  private ensureDataQualityMetadataColumn(): void {
+    const columns = this.db.prepare("PRAGMA table_info(data_quality_issues)").all() as Array<{ name: string }>;
+    if (columns.some((column) => column.name === "metadata_json")) return;
+    this.db.exec("ALTER TABLE data_quality_issues ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';");
   }
 
   saveSpeciesInsights(importBatchId: number, insights: SpeciesInsight[]): void {
@@ -338,15 +424,15 @@ export class SeedBankDatabase {
       const trialStmt = this.db.prepare(`
         INSERT INTO trials (
           id, import_batch_id, source_row, p_accession, source_accession,
-          species, family, treatment, num, start_date, propagule_type, ttd, pc,
-          ced, wsed, csed, liner_start, liner_ttd, lpc, four_start,
-          four_ttd, four_pc, location, status, pcd, notes,
+          species, family, treatment, num, start_date, propagule_type, ttd, pc, pc_raw, pc_scale,
+          ced, wsed, csed, liner_start, liner_ttd, lpc, lpc_raw, lpc_scale, four_start,
+          four_ttd, four_pc, four_pc_raw, four_pc_scale, location, status, pcd, notes,
           treatment_components_json
         ) VALUES (
           @id, @importBatchId, @sourceRow, @pAccession, @sourceAccession,
-          @species, @family, @treatment, @num, @startDate, @propaguleType, @ttd, @pc,
-          @ced, @wsed, @csed, @linerStart, @linerTtd, @lpc, @fourStart,
-          @fourTtd, @fourPc, @location, @status, @pcd, @notes,
+          @species, @family, @treatment, @num, @startDate, @propaguleType, @ttd, @pc, @pcRaw, @pcScale,
+          @ced, @wsed, @csed, @linerStart, @linerTtd, @lpc, @lpcRaw, @lpcScale, @fourStart,
+          @fourTtd, @fourPc, @fourPcRaw, @fourPcScale, @location, @status, @pcd, @notes,
           @treatmentComponentsJson
         )
       `);
@@ -356,6 +442,12 @@ export class SeedBankDatabase {
           ...trial,
           importBatchId: batchId,
           family: trial.family ?? null,
+          pcRaw: trial.pcRaw ?? trial.pc,
+          pcScale: trial.pcScale ?? (trial.pc === null ? null : "ordinal_0_5"),
+          lpcRaw: trial.lpcRaw ?? trial.lpc,
+          lpcScale: trial.lpcScale ?? (trial.lpc === null ? null : "ordinal_0_5"),
+          fourPcRaw: trial.fourPcRaw ?? trial.fourPc,
+          fourPcScale: trial.fourPcScale ?? (trial.fourPc === null ? null : "ordinal_0_5"),
           treatmentComponentsJson: JSON.stringify(trial.treatmentComponents)
         });
       }
@@ -381,11 +473,11 @@ export class SeedBankDatabase {
 
       const issueStmt = this.db.prepare(`
         INSERT INTO data_quality_issues (
-          import_batch_id, severity, title, detail, affected_rows
-        ) VALUES (?, ?, ?, ?, ?)
+          import_batch_id, severity, title, detail, affected_rows, metadata_json
+        ) VALUES (?, ?, ?, ?, ?, ?)
       `);
       for (const issue of result.issues) {
-        issueStmt.run(batchId, issue.severity, issue.title, issue.detail, issue.affectedRows);
+        issueStmt.run(batchId, issue.severity, issue.title, issue.detail, issue.affectedRows, JSON.stringify(issue));
       }
 
       return batchId;

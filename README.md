@@ -15,10 +15,10 @@ This is an independent project. It is not affiliated with Frame Player, and it d
 - Imports PSU-style seed-bank propagation workbooks without committing raw workbook data.
 - Persists each workbook import as an isolated SQLite batch so re-imports do not overwrite historical rows.
 - Computes treatment, species, trial queue, paired-comparison, and data-quality views locally.
-- Treats `PC`, `LPC`, and `4PC` as ordinal 0-5 scores unless exact extracted counts exist.
+- Preserves raw `PC`, `LPC`, and `4PC` values, using documented 0-5 class columns directly and normalizing percentage columns for cross-row analysis.
 - Favors paired accession/species comparisons so rare treatments and uneven species mixes are visible.
 - Labels evidence as `Strong signal`, `Promising`, `Inconclusive`, or `Needs replication`.
-- Supports optional OpenAI species summaries and Ask responses from Electron main only.
+- Supports optional source-backed OpenAI species research and bounded Ask responses from Electron main only.
 - Stores OpenAI keys through Electron safe storage; renderer code must not persist keys or use them for OpenAI calls.
 
 ## Why It Exists
