@@ -656,6 +656,8 @@ test("species explorer researches a species with workbook-backed AI assessment",
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
   await expect(page.getByText("Family unknown until research runs")).toBeVisible();
   await page.getByRole("button", { name: "Run research" }).click();
+  await expect(page.getByRole("heading", { name: "Send workbook evidence to OpenAI?" })).toBeVisible();
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("button", { name: "Researching..." })).toBeDisabled();
   await expect(page.getByRole("heading", { name: "Running source-backed germination research" })).toBeVisible();
   await expect(page.getByText("Searching web sources, checking taxonomy context, and connecting findings to workbook rows.")).toBeVisible();
@@ -701,6 +703,91 @@ test("species explorer researches a species with workbook-backed AI assessment",
     return copy.getBoundingClientRect().top - heading.getBoundingClientRect().bottom;
   });
   expect(familyCardSpacing).toBeLessThan(20);
+});
+
+test("species explorer treats user-cancelled OpenAI research as cancellation feedback", async ({ page }) => {
+  await page.addInitScript(() => {
+    const dashboard = {
+      batch: {
+        id: 7,
+        filename: "fixture.xlsx",
+        importedAt: "2026-01-01T00:00:00.000Z",
+        workbookHash: "hash",
+        rowCount: 3,
+        accessionCount: 2,
+        speciesCount: 1,
+        treatmentCount: 2,
+        warnings: []
+      },
+      metrics: {
+        trials: 3,
+        accessions: 2,
+        species: 1,
+        treatments: 2,
+        doneRate: 0.33,
+        observationsExtracted: 2
+      },
+      treatmentSummaries: [],
+      speciesSummaries: [
+        {
+          species: "Lomatium testii",
+          rows: 3,
+          accessions: 2,
+          treatments: 2,
+          pcCount: 3,
+          bestTreatment: "CS",
+          bestPcMean: 4.5,
+          confidence: "Promising"
+        }
+      ],
+      pairedComparisons: [],
+      trialQueue: [],
+      dataQualityIssues: [],
+      askSuggestions: [],
+      speciesInsights: [],
+      aiInsightStatus: {
+        configured: true,
+        state: "not_generated",
+        message: "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite.",
+        model: "gpt-5.5",
+        generatedAt: null
+      }
+    };
+    (window as any).researchCalls = 0;
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: true, safeStorageAvailable: true }),
+      getDashboard: async () => dashboard,
+      selectWorkbook: async () => dashboard,
+      importLocalDefaultWorkbook: async () => dashboard,
+      saveOpenAiKey: async () => ({ configured: true, safeStorageAvailable: true, dashboard }),
+      clearOpenAiKey: async () => ({ configured: false, safeStorageAvailable: true }),
+      generateSpeciesInsights: async () => dashboard,
+      researchSpecies: async () => {
+        (window as any).researchCalls += 1;
+        throw new Error("Error invoking remote method 'openai:researchSpecies': Error: Request cancelled by user.");
+      },
+      askQuestion: async () => ({
+        answer: "Use CS cautiously.",
+        caveats: ["Promising but underpowered."],
+        citedRows: [3],
+        model: "gpt-5.5",
+        createdAt: "2026-01-01T00:00:00.000Z"
+      })
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
+  await page.getByRole("button", { name: "Run research" }).click();
+  await expect(page.getByRole("heading", { name: "Send workbook evidence to OpenAI?" })).toBeVisible();
+  await expect(page.getByText("Cancel keeps workbook data local and does not start the OpenAI request.")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel", exact: true }).click();
+
+  await expect(page.getByRole("heading", { name: "Request cancelled by user" })).toBeVisible();
+  await expect(page.getByText("No OpenAI request was sent.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Research did not complete" })).toHaveCount(0);
+  await expect(page.getByText(/Error invoking remote method/)).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => (window as any).researchCalls)).toBe(0);
 });
 
 test("species explorer exposes every imported species option", async ({ page }) => {
@@ -934,6 +1021,7 @@ test("saving a key immediately enables AI controls without auto-generating", asy
   await expect(page.getByRole("button", { name: "Run research" })).toBeEnabled();
   await expect.poll(() => page.evaluate(() => (window as any).keySaveResearchArgs ?? null)).toBeNull();
   await page.getByRole("button", { name: "Run research" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect.poll(() => page.evaluate(() => (window as any).keySaveResearchArgs)).toEqual({
     batchId: 8,
     species: "Lomatium testii",
@@ -1031,6 +1119,7 @@ test("clearing a key refreshes species explorer AI controls", async ({ page }) =
   await page.goto("/");
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
   await page.getByRole("button", { name: "Run research" }).click();
+  await page.getByRole("button", { name: "Continue" }).click();
   await expect(page.getByRole("button", { name: "Researching..." })).toBeVisible();
 
   await page.getByRole("button", { name: "Settings" }).click();

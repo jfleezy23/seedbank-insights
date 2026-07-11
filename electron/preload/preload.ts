@@ -42,8 +42,8 @@ export interface SeedBankApi {
   clearOpenAiKey(batchId?: number): Promise<OpenAiStatus>;
   generateSpeciesInsights(force?: boolean, batchId?: number): Promise<DashboardData>;
   getSpeciesResearchCacheStatus(batchId?: number): Promise<SpeciesResearchCacheStatus>;
-  researchSpecies(batchId: number, species: string, force?: boolean): Promise<SpeciesResearchResult>;
-  askQuestion(question: string): Promise<AskAnswer>;
+  researchSpecies(batchId: number, species: string, force?: boolean, confirmed?: boolean): Promise<SpeciesResearchResult>;
+  askQuestion(question: string, confirmed?: boolean): Promise<AskAnswer>;
 }
 
 const api: SeedBankApi = {
@@ -64,8 +64,8 @@ const api: SeedBankApi = {
   clearOpenAiKey: (batchId) => ipcRenderer.invoke("openai:clearKey", batchId),
   generateSpeciesInsights: (force, batchId) => ipcRenderer.invoke("openai:generateSpeciesInsights", force, batchId),
   getSpeciesResearchCacheStatus: (batchId) => ipcRenderer.invoke("openai:speciesResearchCacheStatus", batchId),
-  researchSpecies: (batchId, species, force) => ipcRenderer.invoke("openai:researchSpecies", batchId, species, force),
-  askQuestion: (question) => ipcRenderer.invoke("openai:ask", question)
+  researchSpecies: (batchId, species, force, confirmed) => ipcRenderer.invoke("openai:researchSpecies", batchId, species, force, confirmed),
+  askQuestion: (question, confirmed) => ipcRenderer.invoke("openai:ask", question, confirmed)
 };
 
 contextBridge.exposeInMainWorld("seedbank", api);

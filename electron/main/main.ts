@@ -80,22 +80,8 @@ function openAiFailureMessage(action: string): string {
   return `OpenAI ${action} failed. Check Settings, network access, and the API key, then try again.`;
 }
 
-async function confirmOpenAiDataTransfer(action: string): Promise<void> {
-  const options = {
-    type: "warning" as const,
-    title: "Send local workbook evidence to OpenAI?",
-    message: `Continue with ${action}?`,
-    detail:
-      "This sends a bounded, source-cited summary from the active analysis scope to OpenAI. The API key stays on this device. Cancel keeps all workbook data local.",
-    buttons: ["Cancel", "Continue"],
-    defaultId: 0,
-    cancelId: 0,
-    noLink: true
-  };
-  const result = mainWindow && !mainWindow.isDestroyed()
-    ? await dialog.showMessageBox(mainWindow, options)
-    : await dialog.showMessageBox(options);
-  if (result.response !== 1) throw new Error("OpenAI request canceled; workbook data remains local.");
+function requireOpenAiDataTransferConfirmation(confirmed: unknown): void {
+  if (confirmed !== true) throw new Error("Request cancelled by user.");
 }
 
 function uniquePaths(paths: string[]): string[] {
@@ -798,7 +784,7 @@ ipcMain.handle("openai:generateSpeciesInsights", async (_event, force?: boolean,
   generateSpeciesInsightsForBatch({ batchId: optionalBatchId(batchId), force: Boolean(force) })
 );
 
-ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, species: unknown, force?: boolean) => {
+ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, species: unknown, force?: boolean, confirmed?: boolean) => {
   const activeBatchId = optionalBatchId(batchId);
   const requestedSpecies = String(species ?? "").trim().replace(/\s+/g, " ");
   if (!activeBatchId) throw new Error("Import a workbook before researching a species.");
@@ -806,7 +792,7 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
   if (requestedSpecies.length > 160) throw new Error("Selected species name is too long for this research demo.");
 
   const importResult = getDatabase().getImportResult(activeBatchId);
-  if (!importResult) throw new Error("Could not reconstruct the requested import batch from local SQLite.");
+  if (!importResult) throw new Error("The selected import could not be loaded. Refresh the workbook and try again.");
   const dataset = getDatabase().getDatasetState();
   const activeScope = dataset.scopes.find(
     (scope) => scope.id === dataset.activeScopeId && scope.batchIds.includes(activeBatchId)
@@ -835,7 +821,7 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
   const dashboard = withOpenAiStatus(activeScope ? getDatabase().getDashboardForScope(activeScope.id) : getDatabase().getDashboard(activeBatchId));
   const existing = speciesResearchInFlight.get(cacheKey);
   if (existing) return existing;
-  await confirmOpenAiDataTransfer(`source-backed research for ${localSpecies}`);
+  requireOpenAiDataTransferConfirmation(confirmed);
 
   try {
     const pending = researchSpeciesWithExternalSources({
@@ -861,13 +847,13 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
   }
 });
 
-ipcMain.handle("openai:ask", async (_event, question: string) => {
+ipcMain.handle("openai:ask", async (_event, question: string, confirmed?: boolean) => {
   const trimmed = String(question ?? "").trim();
   if (trimmed.length < 3) throw new Error("Ask a more specific question.");
   if (trimmed.length > 700) throw new Error("Questions are limited to 700 characters for the demo.");
   const apiKey = loadOpenAiKey();
   if (!apiKey) throw new Error("OpenAI is not configured. Add an API key in Settings.");
-  await confirmOpenAiDataTransfer("an Ask question about the active analysis scope");
+  requireOpenAiDataTransferConfirmation(confirmed);
   try {
     return await answerSpreadsheetQuestion({
       apiKey,

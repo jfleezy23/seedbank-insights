@@ -30,6 +30,7 @@ import { MetricCard } from "./components/MetricCard";
 import { PairedComparisonPanel } from "./components/PairedComparisonPanel";
 import { TreatmentChart } from "./components/TreatmentChart";
 import { TrialQueueTable } from "./components/TrialQueueTable";
+import { humanizeErrorMessage, isUserCancelledRequest, USER_CANCELLED_REQUEST_MESSAGE } from "./core/errors";
 import { buildSpeciesResourceLinks } from "./core/speciesResources";
 import type {
   DashboardData,
@@ -53,6 +54,11 @@ const navItems = [
   { label: "Ask", icon: MessageSquareText },
   { label: "Help", icon: CircleHelp }
 ] as const;
+
+interface OpenAiConfirmRequest {
+  action: string;
+  resolve: (confirmed: boolean) => void;
+}
 
 type NavLabel = (typeof navItems)[number]["label"];
 
@@ -235,6 +241,7 @@ function SpeciesExplorer({
   const activeResearchKey = researchKey(scopeIdentity, activeSpecies);
   const selectedResearch = researchResults[activeResearchKey];
   const selectedResearchError = researchErrors[activeResearchKey];
+  const selectedResearchCancelled = selectedResearchError === USER_CANCELLED_REQUEST_MESSAGE;
   const isResearching = researchingSpecies === activeResearchKey;
   const cachedResearchAvailable = hasCacheStatus && !cacheMissingSpecies.has(activeSpecies);
   const canResearch =
@@ -247,7 +254,7 @@ function SpeciesExplorer({
   useEffect(() => {
     if (!hasBatch || !activeSpecies || selectedResearch || selectedResearchError || isResearching) return;
     // Cached local research can load automatically. Live research remains an
-    // explicit user action and is confirmed in the privileged main process.
+    // explicit user action and requires an app-styled confirmation before IPC.
     if (!cachedResearchAvailable) return;
     onResearchSpecies(activeSpecies, false);
   }, [
@@ -491,11 +498,11 @@ function SpeciesExplorer({
                   ) : null}
                 </>
               ) : selectedResearchError ? (
-                <section className="species-research-state warning">
-                  <AlertCircle size={22} />
+                <section className={`species-research-state${selectedResearchCancelled ? "" : " warning"}`}>
+                  {selectedResearchCancelled ? <BrainCircuit size={22} /> : <AlertCircle size={22} />}
                   <div>
-                    <h4>Research did not complete</h4>
-                    <p>{selectedResearchError}</p>
+                    <h4>{selectedResearchCancelled ? "Request cancelled by user" : "Research did not complete"}</h4>
+                    {selectedResearchCancelled ? <p>No OpenAI request was sent.</p> : <p>{selectedResearchError}</p>}
                   </div>
                 </section>
               ) : !aiConfigured ? (
@@ -643,6 +650,74 @@ function HelpPanel() {
         </div>
       </section>
     </section>
+  );
+}
+
+function OpenAiConfirmModal({
+  request,
+  onResolve
+}: {
+  request: OpenAiConfirmRequest | null;
+  onResolve: (confirmed: boolean) => void;
+}) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const continueButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    if (!request) return;
+
+    continueButtonRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onResolve(false);
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onResolve, request]);
+
+  if (!request) return null;
+
+  return (
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onResolve(false);
+      }}
+    >
+      <section ref={dialogRef} className="settings-modal openai-confirm-modal" role="dialog" aria-modal="true" aria-labelledby="openai-confirm-title">
+        <div className="panel-heading">
+          <div>
+            <span className="ai-state configured">
+              <BrainCircuit size={16} />
+              AI transfer
+            </span>
+            <h2 id="openai-confirm-title">Send workbook evidence to OpenAI?</h2>
+            <p>Continue with {request.action}?</p>
+          </div>
+          <button type="button" aria-label="Cancel OpenAI request" onClick={() => onResolve(false)}>
+            <X size={18} />
+          </button>
+        </div>
+        <div className="openai-confirm-copy">
+          <p>The app sends only bounded, source-cited evidence from the active analysis scope. Your API key stays on this device.</p>
+          <p>Cancel keeps workbook data local and does not start the OpenAI request.</p>
+        </div>
+        <div className="settings-actions">
+          <button type="button" className="secondary-action" onClick={() => onResolve(false)}>
+            Cancel
+          </button>
+          <button ref={continueButtonRef} type="button" className="primary-action" onClick={() => onResolve(true)}>
+            <BrainCircuit size={16} />
+            Continue
+          </button>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -965,6 +1040,7 @@ function App() {
   const [aiConfigured, setAiConfigured] = useState(false);
   const [safeStorageAvailable, setSafeStorageAvailable] = useState(true);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [openAiConfirmRequest, setOpenAiConfirmRequest] = useState<OpenAiConfirmRequest | null>(null);
   const [apiKeyInput, setApiKeyInput] = useState("");
   const [savingKey, setSavingKey] = useState(false);
   const [speciesResearchResults, setSpeciesResearchResults] = useState<Record<string, SpeciesResearchResult>>({});
@@ -973,6 +1049,19 @@ function App() {
   const researchingSpeciesRef = useRef<string | null>(null);
   const [message, setMessage] = useState("Import the PSU workbook to begin.");
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const confirmOpenAiRequest = useCallback(
+    (action: string) =>
+      new Promise<boolean>((resolve) => {
+        setOpenAiConfirmRequest({ action, resolve });
+      }),
+    []
+  );
+  const resolveOpenAiConfirmRequest = useCallback((confirmed: boolean) => {
+    setOpenAiConfirmRequest((current) => {
+      current?.resolve(confirmed);
+      return null;
+    });
+  }, []);
   const activeBatchIdRef = useRef<number | null>(emptyDashboard.batch?.id ?? null);
   const activeResearchScopeRef = useRef(researchScopeIdentity(emptyDashboard));
 
@@ -1107,7 +1196,7 @@ function App() {
         setMessage("Preview canceled.");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Import failed.");
+      setMessage(humanizeErrorMessage(error, "Import failed."));
     } finally {
       setLoading(false);
     }
@@ -1124,7 +1213,7 @@ function App() {
       setImportPreviews([]);
       setMessage("Imports committed. The active analysis scope was not changed.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Import commit failed.");
+      setMessage(humanizeErrorMessage(error, "Import commit failed."));
     } finally {
       setLoading(false);
     }
@@ -1138,7 +1227,7 @@ function App() {
       setImportPreviews([preview]);
       setMessage(preview.requiresReprocessing ? "The source is unchanged, but a parser refresh is ready for review." : preview.unchangedSourceId ? "The synced file is unchanged." : "A changed workbook version is ready for review.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to check the workbook.");
+      setMessage(humanizeErrorMessage(error, "Unable to check the workbook."));
     } finally {
       setLoading(false);
     }
@@ -1156,7 +1245,7 @@ function App() {
         setMessage("Relink canceled.");
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to relink the workbook source.");
+      setMessage(humanizeErrorMessage(error, "Unable to relink the workbook source."));
     } finally {
       setLoading(false);
     }
@@ -1170,7 +1259,7 @@ function App() {
       setImportPreviews((current) => current.map((candidate) => (candidate.token === token ? preview : candidate)));
       setMessage(`Rebuilt the preview using worksheet ${preview.worksheetName}. Review the accepted and quarantined rows before importing.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to select the worksheet.");
+      setMessage(humanizeErrorMessage(error, "Unable to select the worksheet."));
     } finally {
       setLoading(false);
     }
@@ -1185,7 +1274,7 @@ function App() {
       applyDashboard(response.dashboard);
       setMessage(`Active analysis scope: ${response.dashboard.scope?.name ?? "selected cohort"}.`);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to select analysis scope.");
+      setMessage(humanizeErrorMessage(error, "Unable to select analysis scope."));
     } finally {
       setLoading(false);
     }
@@ -1202,7 +1291,7 @@ function App() {
       applyDashboard(response.dashboard);
       setMessage("Combined scope created and selected explicitly.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to create combined scope.");
+      setMessage(humanizeErrorMessage(error, "Unable to create combined scope."));
     } finally {
       setLoading(false);
     }
@@ -1218,7 +1307,7 @@ function App() {
       applyDashboard(response.dashboard);
       setMessage("Treatment codebook version saved and eligibility was recalculated for the active scope.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save the codebook entry.");
+      setMessage(humanizeErrorMessage(error, "Unable to save the codebook entry."));
     } finally {
       setLoading(false);
     }
@@ -1245,7 +1334,7 @@ function App() {
       const result = await window.seedbank.exportAdvancedAnalysis();
       setMessage(result ? `Exported pair, species, and manifest files to ${result.directory}.` : "Export canceled.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Advanced analysis export failed.");
+      setMessage(humanizeErrorMessage(error, "Advanced analysis export failed."));
     } finally {
       setLoading(false);
     }
@@ -1281,7 +1370,7 @@ function App() {
       setApiKeyInput("");
       setSettingsOpen(false);
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to save OpenAI key.");
+      setMessage(humanizeErrorMessage(error, "Unable to save OpenAI key."));
     } finally {
       setSavingKey(false);
     }
@@ -1306,7 +1395,19 @@ function App() {
           : `Running source-backed germination research for ${species}...`
       );
       try {
-        const result = await window.seedbank.researchSpecies(requestedBatchId, species, force);
+        const cacheStatus = dashboard.speciesResearchCacheStatus;
+        const hasCachedResearch =
+          Boolean(cacheStatus?.totalSpecies) && !new Set(cacheStatus?.missingSpecies ?? []).has(species);
+        const needsOpenAiConfirmation = aiConfigured && (force || !hasCachedResearch);
+        if (needsOpenAiConfirmation) {
+          const confirmed = await confirmOpenAiRequest(`source-backed research for ${species}`);
+          if (!confirmed) {
+            setSpeciesResearchErrors((current) => ({ ...current, [key]: USER_CANCELLED_REQUEST_MESSAGE }));
+            setMessage(USER_CANCELLED_REQUEST_MESSAGE);
+            return;
+          }
+        }
+        const result = await window.seedbank.researchSpecies(requestedBatchId, species, force, true);
         if (activeBatchIdRef.current !== requestedBatchId || activeResearchScopeRef.current !== requestedScopeIdentity) {
           setMessage("Species research completed for a prior analysis scope, but a newer scope is active.");
           return;
@@ -1319,7 +1420,12 @@ function App() {
             : `Research assessment ready for ${species}.`
         );
       } catch (error) {
-        const detail = error instanceof Error ? error.message : "Unable to research this species.";
+        if (isUserCancelledRequest(error)) {
+          setSpeciesResearchErrors((current) => ({ ...current, [key]: USER_CANCELLED_REQUEST_MESSAGE }));
+          setMessage(USER_CANCELLED_REQUEST_MESSAGE);
+          return;
+        }
+        const detail = humanizeErrorMessage(error, "Unable to research this species.");
         setSpeciesResearchErrors((current) => ({ ...current, [key]: detail }));
         setMessage(detail);
       } finally {
@@ -1332,7 +1438,7 @@ function App() {
         });
       }
     },
-    [refreshSpeciesResearchCacheStatus]
+    [aiConfigured, confirmOpenAiRequest, dashboard.speciesResearchCacheStatus, refreshSpeciesResearchCacheStatus]
   );
 
   async function clearOpenAiKey() {
@@ -1356,7 +1462,7 @@ function App() {
       setApiKeyInput("");
       setMessage("OpenAI key cleared. The app remains fully local.");
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Unable to clear OpenAI key.");
+      setMessage(humanizeErrorMessage(error, "Unable to clear OpenAI key."));
     } finally {
       setSavingKey(false);
     }
@@ -1561,7 +1667,7 @@ function App() {
 
         {selectedNav === "Ask" && (
           <section className="view-stack">
-            <AskPanel dashboard={dashboard} aiConfigured={aiConfigured} />
+            <AskPanel dashboard={dashboard} aiConfigured={aiConfigured} onConfirmOpenAiRequest={confirmOpenAiRequest} />
           </section>
         )}
 
@@ -1579,6 +1685,7 @@ function App() {
         onSave={saveOpenAiKey}
         onClear={clearOpenAiKey}
       />
+      <OpenAiConfirmModal request={openAiConfirmRequest} onResolve={resolveOpenAiConfirmRequest} />
     </div>
   );
 }

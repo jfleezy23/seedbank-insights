@@ -1,13 +1,16 @@
 import { useState } from "react";
 import { BrainCircuit, KeyRound, Send } from "lucide-react";
+import { humanizeErrorMessage, USER_CANCELLED_REQUEST_MESSAGE } from "../core/errors";
 import type { AskAnswer, DashboardData } from "../core/types";
 
 export function AskPanel({
   dashboard,
-  aiConfigured
+  aiConfigured,
+  onConfirmOpenAiRequest
 }: {
   dashboard: DashboardData;
   aiConfigured: boolean;
+  onConfirmOpenAiRequest: (action: string) => Promise<boolean>;
 }) {
   const [question, setQuestion] = useState("Which technique has the strongest evidence, and where are we underpowered?");
   const [answer, setAnswer] = useState<AskAnswer | null>(null);
@@ -23,10 +26,15 @@ export function AskPanel({
     setLoading(true);
     setError(null);
     try {
-      const next = await window.seedbank.askQuestion(question);
+      const confirmed = await onConfirmOpenAiRequest("an Ask question about the active analysis scope");
+      if (!confirmed) {
+        setError(USER_CANCELLED_REQUEST_MESSAGE);
+        return;
+      }
+      const next = await window.seedbank.askQuestion(question, true);
       setAnswer(next);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "OpenAI Ask failed.");
+      setError(humanizeErrorMessage(caught, "OpenAI Ask failed."));
     } finally {
       setLoading(false);
     }

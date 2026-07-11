@@ -871,6 +871,17 @@ button:disabled {
   font-weight: 750;
 }
 
+.settings-actions button.primary-action {
+  color: #fff;
+  background: var(--psu-green);
+  border-color: var(--psu-green);
+}
+
+.settings-actions button.secondary-action {
+  color: var(--forest);
+  background: var(--soft);
+}
+
 .species-workbench-panel,
 .species-table-panel {
   overflow: hidden;
@@ -1633,6 +1644,26 @@ td strong {
   border: 1px solid var(--line);
   border-radius: 7px;
   color: var(--forest);
+}
+
+.openai-confirm-modal {
+  width: min(520px, 100%);
+}
+
+.openai-confirm-copy {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+}
+
+.openai-confirm-copy p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
 }
 
 .scope-chip {
