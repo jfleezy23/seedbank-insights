@@ -12,6 +12,56 @@ test("dashboard renders primary insight surfaces in browser fallback", async ({ 
   await expect(page.locator(".native-chart-bar")).toHaveCount(0);
 });
 
+test("glossary defines treatment acronyms and flags active-scope unknowns", async ({ page }) => {
+  await page.addInitScript(() => {
+    const dashboard = {
+      batch: { id: 3, filename: "glossary.xlsx", importedAt: "2026-01-01", workbookHash: "hash", rowCount: 13, accessionCount: 5, speciesCount: 3, treatmentCount: 5, warnings: [] },
+      metrics: { trials: 13, accessions: 5, species: 3, treatments: 5, doneRate: 0.75, observationsExtracted: 0 },
+      treatmentSummaries: [
+        { treatment: "CS", propaguleType: "seed", rows: 4, species: 3, accessions: 3, pcCount: 4, pcMean: 4, pcMedian: 4, pcScale: "ordinal_0_5", pcGe4Rate: 1, lpcMean: null, fourPcMean: null, confidence: "Promising", warning: "" },
+        { treatment: "CS16", propaguleType: "seed", rows: 1, species: 1, accessions: 1, pcCount: 1, pcMean: 3, pcMedian: 3, pcScale: "ordinal_0_5", pcGe4Rate: 0, lpcMean: null, fourPcMean: null, confidence: "Needs replication", warning: "" },
+        { treatment: "C+E", propaguleType: "seed", rows: 2, species: 1, accessions: 1, pcCount: 2, pcMean: 4.5, pcMedian: 4.5, pcScale: "ordinal_0_5", pcGe4Rate: 1, lpcMean: null, fourPcMean: null, confidence: "Needs replication", warning: "" },
+        { treatment: "B+A", propaguleType: "stem_cutting", rows: 2, species: 1, accessions: 1, pcCount: 2, pcMean: 3, pcMedian: 3, pcScale: "ordinal_0_5", pcGe4Rate: 0, lpcMean: null, fourPcMean: null, confidence: "Needs replication", warning: "" },
+        { treatment: "ARTSUK", propaguleType: "seed", rows: 1, species: 1, accessions: 1, pcCount: 0, pcMean: null, pcMedian: null, pcScale: null, pcGe4Rate: null, lpcMean: null, fourPcMean: null, confidence: "Needs replication", warning: "" }
+      ],
+      speciesSummaries: [],
+      pairedComparisons: [],
+      trialQueue: [],
+      dataQualityIssues: [],
+      askSuggestions: [],
+      speciesInsights: [],
+      advancedComparisons: [],
+      aiInsightStatus: { configured: false, state: "not_configured", message: "OpenAI optional", model: null, generatedAt: null },
+      speciesResearchCacheStatus: null
+    };
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
+      getDashboard: async () => dashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 3,
+        scopeHash: "hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 3,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      })
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Glossary", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "Treatment Glossary" })).toBeVisible();
+  await expect(page.locator(".glossary-note-grid").getByText(/CS means cold stratification/)).toBeVisible();
+  await expect(page.getByText("GA seed soak")).toBeVisible();
+  await expect(page.getByText("Ethephon seed treatment")).toBeVisible();
+  await expect(page.getByText("B = Basal cutting")).toBeVisible();
+  await expect(page.getByText("CS16: parser pattern")).toBeVisible();
+  await expect(page.getByText("ARTSUK = needs codebook mapping")).toBeVisible();
+  await expect(page.getByText("Needs codebook mapping: ARTSUK")).toBeVisible();
+});
+
 test("Dataset Manager previews immutable imports and Advanced Analysis exposes formal results", async ({ page }) => {
   await page.addInitScript(() => {
     const scope = { id: 7, name: "Combined latest cohorts", batchIds: [1, 2], workbookHashes: ["a", "b"], scopeHash: "scope-hash", isCombined: true, createdAt: "2026-01-01" };
@@ -335,6 +385,7 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
   });
 
   await page.goto("/");
+  await expect(page.getByText(/SQLite/i)).toHaveCount(0);
   await expect(page.getByText("3 / 3 researched species")).toBeVisible();
   await expect(page.getByText("All imported species have cached AI research for the demo.")).toBeVisible();
 
@@ -438,7 +489,16 @@ test("paired comparison direction bars remain valid when no pairs are available"
       getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
       getDashboard: async () => dashboard,
       getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
-      getTreatmentCodebook: async () => []
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 31,
+        scopeHash: "zero-pairs-hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 0,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      })
     };
   });
 
@@ -569,7 +629,7 @@ test("species explorer researches a species with workbook-backed AI assessment",
       aiInsightStatus: {
         configured: true,
         state: "not_generated",
-        message: "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite.",
+        message: "OpenAI is configured. Species Explorer research runs live and is not saved to the local database.",
         model: "gpt-5.5",
         generatedAt: null
       }
@@ -630,6 +690,17 @@ test("species explorer researches a species with workbook-backed AI assessment",
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: true, safeStorageAvailable: true }),
       getDashboard: async () => baseDashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 7,
+        scopeHash: "fixture-hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 1,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      }),
       selectWorkbook: async () => baseDashboard,
       importLocalDefaultWorkbook: async () => baseDashboard,
       saveOpenAiKey: async (_key: string, batchId?: number) => {
@@ -748,7 +819,7 @@ test("species explorer treats user-cancelled OpenAI research as cancellation fee
       aiInsightStatus: {
         configured: true,
         state: "not_generated",
-        message: "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite.",
+        message: "OpenAI is configured. Species Explorer research runs live and is not saved to the local database.",
         model: "gpt-5.5",
         generatedAt: null
       }
@@ -757,6 +828,17 @@ test("species explorer treats user-cancelled OpenAI research as cancellation fee
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: true, safeStorageAvailable: true }),
       getDashboard: async () => dashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 7,
+        scopeHash: "fixture-hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 1,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      }),
       selectWorkbook: async () => dashboard,
       importLocalDefaultWorkbook: async () => dashboard,
       saveOpenAiKey: async () => ({ configured: true, safeStorageAvailable: true, dashboard }),
@@ -788,6 +870,11 @@ test("species explorer treats user-cancelled OpenAI research as cancellation fee
   await expect(page.getByRole("heading", { name: "Research did not complete" })).toHaveCount(0);
   await expect(page.getByText(/Error invoking remote method/)).toHaveCount(0);
   await expect.poll(() => page.evaluate(() => (window as any).researchCalls)).toBe(0);
+
+  await page.getByRole("button", { name: "Insight Board", exact: true }).click();
+  const heroCopy = page.locator(".hero-copy");
+  await expect(heroCopy).toContainText("3 trial rows");
+  await expect(heroCopy).not.toContainText("Request cancelled by user");
 });
 
 test("species explorer exposes every imported species option", async ({ page }) => {
@@ -848,6 +935,17 @@ test("species explorer exposes every imported species option", async ({ page }) 
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
       getDashboard: async () => baseDashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 11,
+        scopeHash: "species-list-hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 250,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      }),
       selectWorkbook: async () => baseDashboard,
       importLocalDefaultWorkbook: async () => baseDashboard,
       saveOpenAiKey: async () => ({ configured: true, safeStorageAvailable: true, dashboard: baseDashboard }),
@@ -956,7 +1054,7 @@ test("saving a key immediately enables AI controls without auto-generating", asy
       aiInsightStatus: {
         configured: true,
         state: "not_generated",
-        message: "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite.",
+        message: "OpenAI is configured. Species Explorer research runs live and is not saved to the local database.",
         model: "gpt-5.5",
         generatedAt: null
       }
@@ -964,6 +1062,17 @@ test("saving a key immediately enables AI controls without auto-generating", asy
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
       getDashboard: async () => baseDashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 8,
+        scopeHash: "fixture-hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 1,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      }),
       selectWorkbook: async () => baseDashboard,
       importLocalDefaultWorkbook: async () => baseDashboard,
       saveOpenAiKey: async (_key: string, batchId?: number) => {
@@ -1012,8 +1121,13 @@ test("saving a key immediately enables AI controls without auto-generating", asy
   await page.getByLabel("OpenAI API key").fill("ui-key-placeholder");
   await page.getByRole("button", { name: "Save key" }).click();
 
-  await expect(page.getByText("OpenAI key saved. Ask and Species Explorer research are ready for this import.")).toBeVisible();
+  await expect(page.locator(".hero-copy")).toContainText("1 trial row");
+  await expect(page.locator(".hero-copy")).not.toContainText("OpenAI key saved");
+  await expect(page.locator(".workspace-status")).toContainText(
+    "OpenAI key saved. Ask and Species Explorer research are ready for this import."
+  );
   await page.getByRole("button", { name: "Ask", exact: true }).click();
+  await expect(page.getByText("OpenAI key saved. Ask and Species Explorer research are ready for this import.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Ask OpenAI" })).toBeEnabled();
   await expect.poll(() => page.evaluate(() => (window as any).savedKeyBatchId)).toBe(8);
   await expect.poll(() => page.evaluate(() => (window as any).keySaveGenerationArgs ?? null)).toBeNull();
@@ -1074,7 +1188,7 @@ test("clearing a key refreshes species explorer AI controls", async ({ page }) =
       aiInsightStatus: {
         configured: true,
         state: "not_generated",
-        message: "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite.",
+        message: "OpenAI is configured. Species Explorer research runs live and is not saved to the local database.",
         model: "gpt-5.5",
         generatedAt: null
       }
@@ -1092,6 +1206,17 @@ test("clearing a key refreshes species explorer AI controls", async ({ page }) =
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: true, safeStorageAvailable: true }),
       getDashboard: async () => configuredDashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({
+        batchId: 8,
+        scopeHash: "fixture-hash",
+        cacheVersion: "species-research-v4",
+        totalSpecies: 1,
+        researchedSpecies: 0,
+        missingSpecies: [],
+        generatedAtLatest: null
+      }),
       selectWorkbook: async () => configuredDashboard,
       importLocalDefaultWorkbook: async () => configuredDashboard,
       saveOpenAiKey: async () => ({ configured: true, safeStorageAvailable: true, dashboard: configuredDashboard }),

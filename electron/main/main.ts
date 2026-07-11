@@ -448,7 +448,7 @@ function withOpenAiStatus(dashboard: DashboardData, override?: Partial<AiInsight
         configured,
         state: "not_generated",
         message: dashboard.batch
-          ? "OpenAI is configured. Species Explorer research runs live and is not stored in SQLite."
+          ? "OpenAI is configured. Species Explorer research runs live and is not saved to the local database."
           : "OpenAI is configured. Import a workbook to research species.",
         model: OPENAI_INSIGHT_MODEL,
         generatedAt: null
@@ -497,7 +497,7 @@ async function generateSpeciesInsightsForBatch({
   void force;
   return withOpenAiStatus(current, {
     state: "not_generated",
-    message: "Species Explorer research runs live per species and is not stored in SQLite.",
+    message: "Species Explorer research runs live per species and is not saved to the local database.",
     model: OPENAI_INSIGHT_MODEL,
     generatedAt: null
   });

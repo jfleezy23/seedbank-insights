@@ -49,4 +49,12 @@ describe("parseTreatment", () => {
     expect(h20.tokens).toEqual(["H2O", "CS"]);
     expect(h20.warnings).toHaveLength(0);
   });
+
+  it("does not apply seed stratification component flags to non-seed propagules", () => {
+    const parsed = parseTreatment("C->WS", "stem_cutting");
+
+    expect(parsed.hasWarm).toBe(false);
+    expect(parsed.warmDays).toEqual([]);
+    expect(parsed.warnings).toContain("Unmapped treatment token: C->WS");
+  });
 });

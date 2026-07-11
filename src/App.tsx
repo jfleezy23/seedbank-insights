@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } fro
 import {
   AlertCircle,
   BarChart3,
+  BookOpenText,
   BrainCircuit,
   CircleHelp,
   Database,
@@ -31,6 +32,13 @@ import { PairedComparisonPanel } from "./components/PairedComparisonPanel";
 import { TreatmentChart } from "./components/TreatmentChart";
 import { TrialQueueTable } from "./components/TrialQueueTable";
 import { humanizeErrorMessage, isUserCancelledRequest, USER_CANCELLED_REQUEST_MESSAGE } from "./core/errors";
+import { parseTreatment } from "./core/treatments";
+import {
+  findTreatmentGlossaryEntry,
+  TREATMENT_GLOSSARY_ENTRIES,
+  TREATMENT_SYNTAX_GLOSSARY,
+  type TreatmentGlossaryEntry
+} from "./core/treatmentGlossary";
 import { buildSpeciesResourceLinks } from "./core/speciesResources";
 import type {
   DashboardData,
@@ -52,6 +60,7 @@ const navItems = [
   { label: "Trial Queue", icon: Database },
   { label: "Data Quality", icon: AlertCircle },
   { label: "Ask", icon: MessageSquareText },
+  { label: "Glossary", icon: BookOpenText },
   { label: "Help", icon: CircleHelp }
 ] as const;
 
@@ -131,6 +140,10 @@ function researchScopeIdentity(dashboard: DashboardData): string {
 
 function researchKey(scopeIdentity: string, species: string): string {
   return `${scopeIdentity}:${species.toLowerCase()}`;
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
 }
 
 function familySourceText(source: SpeciesResearchResult["familySource"] | undefined): string {
@@ -580,6 +593,229 @@ function SpeciesExplorer({
   );
 }
 
+function propaguleDisplay(value: PropaguleType | "any" | undefined): string {
+  if (!value || value === "any") return "Any";
+  return value.replace("_", " ");
+}
+
+function glossaryStatusClass(status: TreatmentGlossaryEntry["status"]): string {
+  return `glossary-status ${status.toLowerCase().replace(/[^a-z0-9]+/g, "-")}`;
+}
+
+function GlossaryEntryTable({
+  title,
+  description,
+  entries
+}: {
+  title: string;
+  description: string;
+  entries: TreatmentGlossaryEntry[];
+}) {
+  return (
+    <section className="panel glossary-table-panel">
+      <div className="panel-heading">
+        <div>
+          <h2>{title}</h2>
+          <p>{description}</p>
+        </div>
+      </div>
+      <div className="table-wrap">
+        <table className="data-table glossary-table">
+          <thead>
+            <tr>
+              <th>Code</th>
+              <th>Scope</th>
+              <th>Meaning</th>
+              <th>Confidence</th>
+              <th>Notes</th>
+            </tr>
+          </thead>
+          <tbody>
+            {entries.map((entry) => (
+              <tr key={`${entry.propaguleType}-${entry.token}`}>
+                <td>
+                  <strong>{entry.token}</strong>
+                  {entry.aliases?.length ? <span className="muted"> aliases: {entry.aliases.join(", ")}</span> : null}
+                </td>
+                <td>{propaguleDisplay(entry.propaguleType)}</td>
+                <td>
+                  <strong>{entry.label}</strong>
+                  <span>{entry.meaning}</span>
+                </td>
+                <td>
+                  <span className={glossaryStatusClass(entry.status)}>{entry.status}</span>
+                </td>
+                <td>
+                  {entry.details ? <span>{entry.details}</span> : <span className="muted">Defined by workbook/code syntax.</span>}
+                  {entry.examples?.length ? <span className="muted"> Examples: {entry.examples.join(", ")}</span> : null}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function TreatmentGlossaryPanel({
+  dashboard,
+  codebook
+}: {
+  dashboard: DashboardData;
+  codebook: TreatmentCodebookEntry[];
+}) {
+  const documentedEntries = TREATMENT_GLOSSARY_ENTRIES.filter((entry) => entry.status === "Workbook documented");
+  const contextualEntries = TREATMENT_GLOSSARY_ENTRIES.filter((entry) => entry.status !== "Workbook documented");
+  const observedTreatments = useMemo(
+    () =>
+      [...dashboard.treatmentSummaries]
+        .sort((left, right) =>
+          propaguleDisplay(left.propaguleType).localeCompare(propaguleDisplay(right.propaguleType)) ||
+          left.treatment.localeCompare(right.treatment)
+        )
+        .map((summary) => {
+          const propaguleType = summary.propaguleType ?? "unknown";
+          const parsed = parseTreatment(summary.treatment, propaguleType, codebook);
+          const tokenDescriptions = parsed.tokens.map((token) => {
+            const entry = findTreatmentGlossaryEntry(token, propaguleType, codebook);
+            return {
+              token,
+              entry,
+              text: entry ? `${token} = ${entry.label}` : `${token} = needs codebook mapping`
+            };
+          });
+          const reviewWarnings = tokenDescriptions
+            .filter(({ entry }) => entry && entry.status !== "Workbook documented" && entry.status !== "Active codebook")
+            .map(({ token, entry }) => `${token}: ${entry?.status.toLowerCase()}`);
+          return {
+            summary,
+            normalized: parsed.normalized,
+            tokenDescriptions,
+            warnings: [
+              ...parsed.warnings.map((warning) => warning.replace("Unmapped treatment token: ", "Needs codebook mapping: ")),
+              ...reviewWarnings
+            ]
+          };
+        }),
+    [codebook, dashboard.treatmentSummaries]
+  );
+
+  return (
+    <section className="view-stack glossary-panel">
+      <section className="panel glossary-intro">
+        <div className="panel-heading">
+          <div>
+            <h2>Treatment Glossary</h2>
+            <p>Human-readable treatment acronyms, separated from statistical eligibility.</p>
+          </div>
+          <span>{documentedEntries.length + contextualEntries.length} defined codes</span>
+        </div>
+        <div className="glossary-note-grid">
+          <article>
+            <strong>Column matters</strong>
+            <span>
+              In the treatment column, CS means cold stratification. In the propagule-type column, CS means stem cutting.
+            </span>
+          </article>
+          <article>
+            <strong>Definitions are not claims</strong>
+            <span>
+              The glossary explains codes; formal inference still requires documented codebook entries and eligible completed rows.
+            </span>
+          </article>
+          <article>
+            <strong>Ambiguous codes stay visible</strong>
+            <span>Species-like or local tokens are shown as needing codebook mapping instead of being silently interpreted.</span>
+          </article>
+        </div>
+      </section>
+
+      <GlossaryEntryTable
+        title="Workbook-documented treatment codes"
+        description="These come from the embedded workbook treatment dictionary and are safe to use as plain-language definitions."
+        entries={documentedEntries}
+      />
+
+      <GlossaryEntryTable
+        title="Contextual and workbook-local codes"
+        description="These are useful for field conversations, but flagged when the workbook dictionary does not fully define them."
+        entries={contextualEntries}
+      />
+
+      <GlossaryEntryTable
+        title="Treatment-string syntax"
+        description="How the app reads compound treatment strings before applying the statistical codebook gates."
+        entries={TREATMENT_SYNTAX_GLOSSARY}
+      />
+
+      <section className="panel glossary-table-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Active scope treatment strings</h2>
+            <p>Parsed from the currently loaded local database scope; unknowns remain descriptive-only.</p>
+          </div>
+          <span>{observedTreatments.length} strings</span>
+        </div>
+        {observedTreatments.length ? (
+          <div className="table-wrap">
+            <table className="data-table glossary-table">
+              <thead>
+                <tr>
+                  <th>Treatment string</th>
+                  <th>Propagule</th>
+                  <th>Parsed meaning</th>
+                  <th>Rows</th>
+                  <th>Review flags</th>
+                </tr>
+              </thead>
+              <tbody>
+                {observedTreatments.map(({ summary, normalized, tokenDescriptions, warnings }) => (
+                  <tr key={`${summary.propaguleType ?? "unknown"}-${summary.treatment}`}>
+                    <td>
+                      <strong>{summary.treatment}</strong>
+                      {normalized && normalized !== summary.treatment ? <span className="muted"> normalized: {normalized}</span> : null}
+                    </td>
+                    <td>{propaguleDisplay(summary.propaguleType)}</td>
+                    <td>
+                      {tokenDescriptions.length ? (
+                        tokenDescriptions.map(({ token, entry, text }, index) => (
+                          <span
+                            key={`${summary.treatment}-${token}-${index}`}
+                            className={entry ? "token-chip" : "token-chip token-chip-warning"}
+                          >
+                            {text}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="token-chip token-chip-warning">No parsed treatment tokens</span>
+                      )}
+                    </td>
+                    <td>{summary.rows}</td>
+                    <td>
+                      {warnings.length ? (
+                        warnings.map((warning, index) => (
+                          <span key={`${summary.treatment}-${warning}-${index}`} className="review-flag">
+                            {warning}
+                          </span>
+                        ))
+                      ) : (
+                        <span className="glossary-status workbook-documented">Documented</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (
+          <p>Import or select a workbook scope to see the treatment strings present in that local database.</p>
+        )}
+      </section>
+    </section>
+  );
+}
+
 function HelpPanel() {
   return (
     <section className="view-stack">
@@ -612,8 +848,8 @@ function HelpPanel() {
           <article>
             <h3>Privacy</h3>
             <p>
-              Workbooks, SQLite data, and AI response cache files stay local. OpenAI keys are stored through Electron
-              main using OS safe storage and are not exposed to renderer code.
+              Workbooks, local database files, and AI response cache files stay local. OpenAI keys are stored through
+              Electron main using OS safe storage and are not exposed to renderer code.
             </p>
           </article>
           <article>
@@ -1047,7 +1283,7 @@ function App() {
   const [speciesResearchErrors, setSpeciesResearchErrors] = useState<Record<string, string>>({});
   const [researchingSpecies, setResearchingSpecies] = useState<string | null>(null);
   const researchingSpeciesRef = useRef<string | null>(null);
-  const [message, setMessage] = useState("Import the PSU workbook to begin.");
+  const [message, setMessage] = useState<string | null>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const confirmOpenAiRequest = useCallback(
     (action: string) =>
@@ -1115,9 +1351,6 @@ function App() {
       setDataset(datasetState);
       setCodebook(treatmentCodebook);
       applyDashboard(current);
-      if (current.batch) {
-        setMessage(`Loaded ${current.batch.filename} from local SQLite.`);
-      }
     }
     void load();
     return () => {
@@ -1131,6 +1364,26 @@ function App() {
     ? `${dashboard.scope.name} · ${dashboard.scope.isCombined ? `${dashboard.scope.batchIds.length} cohorts` : "individual cohort"}`
     : dashboard.batch?.filename ?? "No workbook imported";
   const busy = loading || savingKey;
+  const databaseInsight = useMemo(() => {
+    if (!dashboard.batch) return "No workbook imported — import propagation data to begin.";
+    if (dashboard.scope?.requiresReprocessing) return "This scope needs a parser refresh before formal analysis.";
+    if (dashboard.dataQualityIssues.length) {
+      return `${pluralize(dashboard.dataQualityIssues.length, "data-quality warning")} · ${pluralize(dashboard.metrics.trials, "trial row", "trial rows")} · ${pluralize(dashboard.metrics.species, "species", "species")}.`;
+    }
+    if (bestComparison) {
+      return `${pluralize(dashboard.metrics.trials, "trial row", "trial rows")} · ${pluralize(dashboard.metrics.species, "species", "species")} · best paired signal: ${bestComparison.treatment} vs ${bestComparison.baseline}.`;
+    }
+    return `${pluralize(dashboard.metrics.trials, "trial row", "trial rows")} · ${pluralize(dashboard.metrics.species, "species", "species")} · ${pluralize(dashboard.metrics.treatments, "treatment string")} in scope.`;
+  }, [
+    bestComparison,
+    dashboard.batch,
+    dashboard.dataQualityIssues.length,
+    dashboard.metrics.species,
+    dashboard.metrics.treatments,
+    dashboard.metrics.trials,
+    dashboard.scope?.requiresReprocessing
+  ]);
+  const operationalMessage = message && message !== USER_CANCELLED_REQUEST_MESSAGE ? message : null;
   const researchCacheStatus = dashboard.speciesResearchCacheStatus;
   const activeScopeResearchIdentity = researchScopeIdentity(dashboard);
   const activeSessionResearchCount = Object.keys(speciesResearchResults).filter((key) =>
@@ -1154,12 +1407,12 @@ function App() {
       {
         label: "Trial rows",
         value: dashboard.metrics.trials,
-        detail: `${dashboard.metrics.accessions} accessions`
+        detail: pluralize(dashboard.metrics.accessions, "accession")
       },
       {
         label: "Species",
         value: dashboard.metrics.species,
-        detail: `${dashboard.metrics.treatments} treatment strings`
+        detail: pluralize(dashboard.metrics.treatments, "treatment string")
       },
       {
         label: "Done rate",
@@ -1477,7 +1730,7 @@ function App() {
         style={{ backgroundImage: `url(${seedbankWorkbench})` }}
       />
       <div className="hero-copy">
-        <span>{message}</span>
+        <span>{databaseInsight}</span>
         <strong>
           {bestComparison
             ? `${bestComparison.treatment} vs ${bestComparison.baseline}: ${bestComparison.confidence}`
@@ -1600,6 +1853,12 @@ function App() {
           </div>
         </header>
 
+        {operationalMessage ? (
+          <div className="workspace-status" role="status">
+            {operationalMessage}
+          </div>
+        ) : null}
+
         {selectedNav === "Imports" && (
           <DatasetManager
             dataset={dataset}
@@ -1670,6 +1929,8 @@ function App() {
             <AskPanel dashboard={dashboard} aiConfigured={aiConfigured} onConfirmOpenAiRequest={confirmOpenAiRequest} />
           </section>
         )}
+
+        {selectedNav === "Glossary" && <TreatmentGlossaryPanel dashboard={dashboard} codebook={codebook} />}
 
         {selectedNav === "Help" && <HelpPanel />}
       </main>

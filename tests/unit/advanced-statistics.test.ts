@@ -102,6 +102,32 @@ describe("advanced statistics", () => {
     expect(exported.speciesRows).toHaveLength(30);
   });
 
+  it("keeps statistically clear negative treatment effects inconclusive instead of promising", () => {
+    const trials = Array.from({ length: 12 }, (_, index) => [
+      row(`P${index}`, `Species ${index}`, "C", 5),
+      row(`P${index}`, `Species ${index}`, "CS", 1)
+    ]).flat();
+
+    const comparison = buildAdvancedComparisons(trials)[0];
+
+    expect(comparison.speciesMeanDiff).toBeLessThan(0);
+    expect(comparison.adjustedPValue).not.toBeNull();
+    expect(comparison.confidence).toBe("Inconclusive");
+  });
+
+  it("does not reverse contrasts when the candidate treatment ends with +C", () => {
+    const trials = Array.from({ length: 12 }, (_, index) => [
+      row(`P${index}`, `Species ${index}`, "GA", 2),
+      row(`P${index}`, `Species ${index}`, "GA+C", 4)
+    ]).flat();
+
+    const comparison = buildAdvancedComparisons(trials)[0];
+    const exported = buildAdvancedAnalysisRows(trials);
+
+    expect(comparison).toMatchObject({ baseline: "GA", treatment: "GA+C", speciesMeanDiff: 2 });
+    expect(exported.pairRows[0]).toMatchObject({ baseline: "GA", treatment: "GA+C", diff: 2 });
+  });
+
   it("never pairs an accession across different immutable workbook cohorts", () => {
     const firstCohort = row("P1", "Species one", "C", 1);
     const secondCohort = row("P1", "Species one", "CS", 5);

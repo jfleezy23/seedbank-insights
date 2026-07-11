@@ -213,6 +213,18 @@ button:disabled {
   border-color: var(--psu-green);
 }
 
+.workspace-status {
+  margin: -6px 0 18px;
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--psu-green);
+  border-radius: 8px;
+  color: var(--forest);
+  background: var(--soft);
+  font-size: 13px;
+  font-weight: 750;
+}
+
 .hero-strip {
   position: relative;
   display: grid;
@@ -1378,6 +1390,146 @@ button:disabled {
   gap: 8px;
 }
 
+.glossary-panel {
+  max-width: 1260px;
+}
+
+.glossary-intro {
+  overflow: hidden;
+}
+
+.glossary-note-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.glossary-note-grid article {
+  display: grid;
+  gap: 7px;
+  min-height: 112px;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: linear-gradient(135deg, #fff 0%, var(--soft) 100%);
+}
+
+.glossary-note-grid strong {
+  color: var(--forest);
+  font-size: 14px;
+}
+
+.glossary-note-grid span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.glossary-table-panel {
+  overflow: hidden;
+}
+
+.table-wrap {
+  width: 100%;
+  overflow-x: auto;
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.data-table th,
+.data-table td {
+  padding: 11px 12px;
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+  vertical-align: top;
+}
+
+.data-table th {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.glossary-table td {
+  color: var(--forest);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.glossary-table td:first-child {
+  min-width: 150px;
+}
+
+.glossary-table td:nth-child(3) {
+  min-width: 260px;
+}
+
+.glossary-table strong,
+.glossary-table span {
+  display: block;
+}
+
+.glossary-status,
+.token-chip,
+.review-flag {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  min-height: 28px;
+  margin: 0 6px 6px 0;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--forest);
+  background: #fff;
+  font-size: 11px;
+  font-weight: 850;
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
+.glossary-status.workbook-documented,
+.glossary-status.active-codebook {
+  border-color: rgba(109, 141, 36, 0.35);
+  color: var(--forest);
+  background: rgba(207, 216, 45, 0.22);
+}
+
+.glossary-status.workbook-row-evidence,
+.glossary-status.parser-pattern {
+  border-color: rgba(33, 57, 33, 0.16);
+  background: var(--soft);
+}
+
+.glossary-status.contextual-inference,
+.glossary-status.needs-confirmation,
+.review-flag,
+.token-chip-warning {
+  border-color: rgba(185, 119, 14, 0.32);
+  color: #6f4400;
+  background: #fff8e8;
+}
+
+.token-chip {
+  justify-content: flex-start;
+  border-color: rgba(33, 57, 33, 0.13);
+  background: #f7f9f3;
+  white-space: normal;
+}
+
+.review-flag {
+  justify-content: flex-start;
+  max-width: 260px;
+  text-align: left;
+  white-space: normal;
+}
+
 .resource-heading {
   display: flex;
   align-items: baseline;
@@ -1843,6 +1995,7 @@ td strong {
   .overview-grid,
   .dashboard-grid,
   .view-grid.two-column,
+  .glossary-note-grid,
   .dataset-grid,
   .preview-grid,
   .codebook-form {

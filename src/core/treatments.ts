@@ -59,22 +59,25 @@ export function parseTreatment(
     .filter(Boolean);
   const normalized = tokens.join("+");
   const warnings: string[] = [];
+  const seedTreatment = propaguleType === "seed";
 
-  const hasCold = tokens.some((token) => token === "CS" || /^CS\d+$/.test(token));
-  const hasWarm = tokens.some((token) => token === "WS" || /^WS\d+$/.test(token) || token.endsWith("->WS"));
-  const hasScarWh = tokens.includes("SCARWH");
-  const hasScarification = hasScarWh || tokens.some((token) => token === "SCAR");
-  const hasHotWater = hasScarWh || tokens.includes("H2O") || tokens.includes("HOTWATER");
-  const hasGa = tokens.some((token) => /^GA-?\d*$/.test(token));
+  const hasCold = seedTreatment && tokens.some((token) => token === "CS" || /^CS\d+$/.test(token));
+  const hasWarm = seedTreatment && tokens.some((token) => token === "WS" || /^WS\d+$/.test(token) || token.endsWith("->WS"));
+  const hasScarWh = seedTreatment && tokens.includes("SCARWH");
+  const hasScarification = hasScarWh || (seedTreatment && tokens.some((token) => token === "SCAR"));
+  const hasHotWater = hasScarWh || (seedTreatment && (tokens.includes("H2O") || tokens.includes("HOTWATER")));
+  const hasGa = seedTreatment && tokens.some((token) => /^GA-?\d*$/.test(token));
   const isControl = tokens.length === 1 ? tokens[0] === "C" : tokens[tokens.length - 1] === "C";
 
   const coldDays = tokens.flatMap((token) => {
+    if (!seedTreatment) return [];
     if (token === "CS") return [120];
     const explicit = numberAfter("CS", token);
     return explicit === null ? [] : [explicit];
   });
 
   const warmDays = tokens.flatMap((token) => {
+    if (!seedTreatment) return [];
     if (token === "WS") return [84];
     const explicit = numberAfter("WS", token);
     return explicit === null ? [] : [explicit];
@@ -84,17 +87,16 @@ export function parseTreatment(
   for (const token of tokens) {
     const known =
       documented.has(token) ||
-      (propaguleType === "seed" && (
-      token === "C" ||
-      token === "CS" ||
-      token === "WS" ||
-      token === "SCAR" ||
-      token === "SCARWH" ||
-      token === "H2O" ||
-      /^GA-?\d*$/.test(token) ||
-      /^CS\d+$/.test(token) ||
-      /^WS\d+$/.test(token)
-      ));
+      (propaguleType === "seed" &&
+        (token === "C" ||
+          token === "CS" ||
+          token === "WS" ||
+          token === "SCAR" ||
+          token === "SCARWH" ||
+          token === "H2O" ||
+          /^GA-?\d*$/.test(token) ||
+          /^CS\d+$/.test(token) ||
+          /^WS\d+$/.test(token)));
     if (!known) warnings.push(`Unmapped treatment token: ${token}`);
   }
 

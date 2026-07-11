@@ -8,6 +8,7 @@
 - Keep scope tight. Do the requested task, not adjacent refactors.
 - Avoid reshaping public APIs, data models, build systems, or critical runtime paths unless the task requires it.
 - For UI work, verify layout, spacing, overflow, disabled states, and visual stability. Screenshots are evidence.
+- User-facing UI copy should use human terms such as "local database"; do not surface engine jargon such as "SQLite" in the app.
 - For bug fixes, identify the actual cause before patching symptoms.
 - Never use `git add .` or `git add -A` unless explicitly told to. Stage explicit paths only.
 - Before staging or committing, inspect `git status` and the relevant diff.

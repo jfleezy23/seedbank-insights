@@ -95,6 +95,18 @@ describe("pairedComparison", () => {
     expect(comparison.replicationTargetBasis).toMatch(/not a statistical power estimate/i);
   });
 
+  it("does not promote a replicated negative treatment effect as promising", () => {
+    const trials = Array.from({ length: 12 }, (_, index) => [
+      trial(`P${index}`, `Species ${index}`, "C", 5),
+      trial(`P${index}`, `Species ${index}`, "CS", 1)
+    ]).flat();
+
+    const comparison = pairedComparison(trials, "C", "CS");
+
+    expect(comparison.meanDiff).toBeLessThan(0);
+    expect(comparison.confidence).toBe("Inconclusive");
+  });
+
   it("does not call repeated accessions from one species a strong signal", () => {
     const trials = Array.from({ length: 12 }, (_, index) => [
       trial(`P${index}`, "Species one", "C", 1),

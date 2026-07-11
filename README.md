@@ -13,13 +13,15 @@ This is an independent project. It is not affiliated with Frame Player, and it d
 ## What It Does
 
 - Imports PSU-style seed-bank propagation workbooks without committing raw workbook data.
-- Registers synced workbook sources, previews every import, and persists changed content as immutable SQLite versions.
+- Registers synced workbook sources, previews every import, and persists changed content as immutable local-database versions.
 - Keeps individual and explicitly combined analysis scopes separate; import never silently changes the active scope.
 - Quarantines populated rows with missing required analysis fields instead of silently coercing or dropping them.
 - Computes treatment, species, trial queue, paired-comparison, and data-quality views locally.
 - Preserves raw `PC`, `LPC`, and `4PC` values, using documented 0-5 class cells directly and normalizing exact percentage cells for cross-row analysis.
 - Separates seed, stem-cutting, and division outcomes and uses species-clustered paired inference for completed trials.
+- Provides a Glossary workspace for workbook-documented treatment acronyms, parser patterns, and local/contextual codes without treating descriptive definitions as statistical eligibility.
 - Labels evidence as `Strong signal`, `Promising`, `Inconclusive`, or `Needs replication`.
+- Keeps negative treatment effects visible as negative comparisons but does not label them `Promising` or `Strong signal`.
 - Supports optional source-backed OpenAI species research and bounded Ask responses from Electron main only.
 - Stores OpenAI keys through Electron safe storage; renderer code must not persist keys or use them for OpenAI calls.
 
@@ -48,7 +50,7 @@ Current emphasis:
 
 ```text
 src/                 React UI, deterministic analysis, workbook parsing, sample data
-electron/            Electron main/preload, SQLite persistence, OpenAI IPC boundary
+electron/            Electron main/preload, local database persistence, OpenAI IPC boundary
 tests/               Unit, integration, UI, and synthetic workbook fixtures
 scripts/             Local smoke, packaging, icon, SCA, and secret-scan helpers
 assets/branding/     Replaceable prototype branding and generated image assets
@@ -75,7 +77,7 @@ docs/                Product, architecture, release, security, and design notes
 
 ## Data And Privacy
 
-Raw project workbooks are intentionally ignored by git. Do not commit `P_accessions_new.xlsx`, local PSU-style workbooks, `.env` files, runtime SQLite databases, logs, or generated release output.
+Raw project workbooks are intentionally ignored by git. Do not commit `P_accessions_new.xlsx`, local PSU-style workbooks, `.env` files, runtime local databases, logs, or generated release output.
 
 The committed fixture at `tests/fixtures/psu-style-accessions-fixture.xlsx` is synthetic and exists so CI can exercise the Excel import path without publishing sensitive source data.
 

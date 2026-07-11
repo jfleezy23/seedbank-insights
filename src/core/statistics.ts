@@ -144,9 +144,10 @@ function confidenceForComparison(
   const nonTies = improved + worse;
   const directionConsistency = nonTies ? Math.max(improved, worse) / nonTies : 0;
   const intervalCrossesZero = ciLow <= 0 && ciHigh >= 0;
+  const positiveEffect = meanDiff > 0 && ciLow > 0 && improved > worse;
 
   if (n < 3) return "Needs replication";
-  if (n < 5 || intervalCrossesZero) return "Inconclusive";
+  if (n < 5 || intervalCrossesZero || !positiveEffect) return "Inconclusive";
   if (
     n >= 10 &&
     speciesCount >= 5 &&
@@ -428,6 +429,7 @@ function evidenceTier(
   const speciesWinRate = nonTiedSpecies ? comparison.speciesWins / nonTiedSpecies : 0;
   const direction = Math.max(speciesWinRate, 1 - speciesWinRate);
   const effect = Math.abs(raw.speciesMeanDiff);
+  const positiveEffect = raw.speciesMeanDiff > 0 && raw.ciLow > 0 && comparison.speciesWins > comparison.speciesLosses;
   const repeatedCohorts = raw.cohortDirections.filter(
     (cohort) => cohort.speciesCount >= 5 && Math.sign(cohort.meanDiff) === Math.sign(raw.speciesMeanDiff)
   ).length;
@@ -435,7 +437,8 @@ function evidenceTier(
   if (
     raw.ciLow <= 0 && raw.ciHigh >= 0 ||
     comparison.adjustedPValue === null ||
-    comparison.adjustedPValue >= 0.05
+    comparison.adjustedPValue >= 0.05 ||
+    !positiveEffect
   ) return "Inconclusive";
   if (
     comparison.speciesCount >= 30 &&
@@ -484,7 +487,7 @@ export function buildAdvancedAnalysisRows(
       for (let right = left + 1; right < treatmentScores.length; right += 1) {
         let baseline = treatmentScores[left];
         let treatment = treatmentScores[right];
-        if (treatment.treatment === "C" || (baseline.treatment !== "C" && treatment.treatment.endsWith("+C"))) {
+        if (treatment.treatment === "C" || (baseline.treatment.endsWith("+C") && !treatment.treatment.endsWith("+C"))) {
           [baseline, treatment] = [treatment, baseline];
         }
         const first = rows[0];
@@ -574,7 +577,7 @@ export function buildAdvancedComparisons(
       for (let right = left + 1; right < treatmentScores.length; right += 1) {
         let [baseline, baselineScore] = treatmentScores[left];
         let [treatment, treatmentScore] = treatmentScores[right];
-        if (treatment === "C" || (baseline !== "C" && treatment.endsWith("+C"))) {
+        if (treatment === "C" || (baseline.endsWith("+C") && !treatment.endsWith("+C"))) {
           [baseline, treatment] = [treatment, baseline];
           [baselineScore, treatmentScore] = [treatmentScore, baselineScore];
         }
