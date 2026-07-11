@@ -1844,7 +1844,7 @@ td strong {
   padding: 13px;
   border: 1px solid var(--line);
   border-radius: 9px;
-  background: linear-gradient(135deg, #fff 0%, var(--soft) 100%);
+  background: linear-gradient(135deg, var(--surface) 0%, var(--soft) 100%);
 }
 
 .import-help-card strong {
@@ -1921,7 +1921,7 @@ td strong {
 
 .codebook-form {
   display: grid;
-  grid-template-columns: 150px 110px 1fr 2fr auto;
+  grid-template-columns: minmax(150px, 0.8fr) minmax(120px, 0.7fr) minmax(210px, 1.2fr) minmax(280px, 2fr) auto;
   align-items: end;
   gap: 10px;
   margin-top: 12px;
@@ -1930,6 +1930,7 @@ td strong {
 .codebook-field {
   display: grid;
   gap: 5px;
+  min-width: 0;
 }
 
 .codebook-field span {
@@ -1943,11 +1944,17 @@ td strong {
 .codebook-form input,
 .codebook-form select,
 .dataset-grid select {
+  width: 100%;
+  min-width: 0;
   min-height: 40px;
   padding: 0 10px;
   border: 1px solid var(--line);
   border-radius: 7px;
   background: #fff;
+}
+
+.codebook-form button {
+  white-space: nowrap;
 }
 
 .table-scroll { overflow-x: auto; }
@@ -1966,6 +1973,12 @@ td strong {
 .advanced-table th,
 .advanced-table td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
 .advanced-table th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+
+@media (max-width: 1360px) {
+  .codebook-form {
+    grid-template-columns: 1fr 1fr;
+  }
+}
 
 @media (max-width: 1280px) {
   .app-shell {

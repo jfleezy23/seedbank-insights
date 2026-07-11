@@ -100,6 +100,36 @@ test("Dataset Manager previews immutable imports and Advanced Analysis exposes f
   await expect(page.getByRole("heading", { name: "Workbook sources" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Active analysis scope" })).toBeVisible();
   await expect(page.getByText(/Advanced: this is where documented local treatment codes/)).toBeVisible();
+  await expect(page.locator(".codebook-form input, .codebook-form select, .codebook-form button")).toHaveCount(5);
+  await expect
+    .poll(() =>
+      page.locator(".codebook-form input, .codebook-form select, .codebook-form button").evaluateAll((elements) => {
+        if (elements.length < 5) return true;
+        const rects = elements.map((element) => {
+          const rect = element.getBoundingClientRect();
+          return {
+            bottom: rect.bottom,
+            height: rect.height,
+            left: rect.left,
+            right: rect.right,
+            top: rect.top,
+            width: rect.width
+          };
+        });
+        if (rects.some((rect) => rect.width === 0 || rect.height === 0)) return true;
+        for (let i = 0; i < rects.length; i += 1) {
+          for (let j = i + 1; j < rects.length; j += 1) {
+            const a = rects[i];
+            const b = rects[j];
+            const sameRow = a.top < b.bottom && b.top < a.bottom;
+            const overlaps = a.left < b.right && b.left < a.right;
+            if (sameRow && overlaps) return true;
+          }
+        }
+        return false;
+      })
+    )
+    .toBe(false);
   await expect(page.getByText("2166")).toBeVisible();
   await expect(page.getByText("Row 35: Missing treatment")).toBeVisible();
   await expect(page.getByText("Scope: Combined latest cohorts")).toBeVisible();

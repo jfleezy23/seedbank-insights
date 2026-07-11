@@ -1134,8 +1134,8 @@ function DatasetManager({
           <article className="import-help-card">
             <strong>Relink moved files</strong>
             <p>
-              Use Relink when Drive moved, renamed, or cloud-only a file. It reconnects the source without replacing
-              history.
+              Use Relink when Google Drive moves, renames, or makes a file cloud-only. It reconnects the source without
+              replacing history.
             </p>
           </article>
           <article className="import-help-card">
@@ -1885,6 +1885,7 @@ function App() {
             return (
               <button
                 className={selectedNav === item.label ? "active" : ""}
+                aria-label={item.label}
                 aria-current={selectedNav === item.label ? "page" : undefined}
                 key={item.label}
                 type="button"
