@@ -24,7 +24,7 @@ SeedBank Insights is a desktop prototype for reviewing PSU-style seed-bank propa
 
 ## Privacy And OpenAI
 
-Workbook files, SQLite data, and species research cache files stay local to the desktop app. Raw project workbooks are ignored by git and should not be committed. The v0.3 workflow reads synced local files; it does not use Google OAuth, Drive API tokens, background watchers, or raw workbook uploads.
+Workbook files, SQLite data, and species research cache files stay local to the desktop app. Raw project workbooks are ignored by git and should not be committed. The v0.4 source workflow reads synced local files; it does not use Google OAuth, Drive API tokens, background watchers, or raw workbook uploads.
 
 OpenAI is optional. API keys are entered in Settings and stored through Electron main with OS-backed safe storage. Renderer code does not persist API keys or call OpenAI directly.
 

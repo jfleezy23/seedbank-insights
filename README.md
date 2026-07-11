@@ -109,7 +109,7 @@ $env:READY_WORKBOOK_IMPORT_TEST_PATH = "<local path>\P_accessions_ready.xlsx"
 pnpm exec vitest run --reporter=verbose
 ```
 
-The current v0.3 acceptance target is: the original workbook imports 128 analyzable trials; the larger workbook recognizes 2,204 populated records, imports 2,166 analyzable rows, exposes 38 quarantined rows, preserves source accession and `D` status, and produces non-empty Advanced Analysis contrasts when completed documented pairs exist.
+The current v0.4 source acceptance target is: the original workbook imports 128 analyzable trials; the larger workbook recognizes 2,204 populated records, imports 2,166 analyzable rows, exposes 38 quarantined rows, preserves source accession and `D` status, and produces non-empty Advanced Analysis contrasts when completed documented pairs exist.
 
 Run the app in development:
 

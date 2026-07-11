@@ -37,7 +37,7 @@ $env:READY_WORKBOOK_IMPORT_TEST_PATH = "<local path>\P_accessions_ready.xlsx"
 pnpm exec vitest run --reporter=verbose
 ```
 
-Expected v0.3 workbook checks:
+Expected v0.4 source workbook checks:
 
 - original workbook imports 128 analyzable trials
 - larger workbook recognizes 2,204 populated records

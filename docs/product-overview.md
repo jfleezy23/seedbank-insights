@@ -59,7 +59,7 @@ The UI is meant for repeated review: dense but readable, clear navigation, visib
 - treating AI text as authoritative evidence
 - silently combining cohorts or deduplicating cross-source overlaps
 - inferring undocumented treatment-code meaning
-- adding Google OAuth, Drive API tokens, background file watching, or raw-data uploads in v0.3
+- adding Google OAuth, Drive API tokens, background file watching, or raw-data uploads in v0.4 source work
 - faking or redrawing official institutional marks
 - merging this project with Frame Player or reusing Frame Player assets/code
 

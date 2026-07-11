@@ -38,7 +38,7 @@ Required checks should include the main CI workflow once it is green on GitHub.
 - `pnpm run sca` runs package vulnerability audit.
 - `pnpm run app:build` and `pnpm run app:smoke` validate unpacked packaged desktop wiring, but manual launched-app evidence is still required before release claims.
 
-Local real-workbook acceptance is not a CI gate because the source workbooks are private. When available, run Vitest with `WORKBOOK_IMPORT_TEST_PATH` and `READY_WORKBOOK_IMPORT_TEST_PATH` pointing at local synced workbook copies. The v0.3 acceptance result is 128 analyzable original trials and 2,204 populated / 2,166 analyzable / 38 quarantined larger-workbook rows.
+Local real-workbook acceptance is not a CI gate because the source workbooks are private. When available, run Vitest with `WORKBOOK_IMPORT_TEST_PATH` and `READY_WORKBOOK_IMPORT_TEST_PATH` pointing at local synced workbook copies. The v0.4 source acceptance result is 128 analyzable original trials and 2,204 populated / 2,166 analyzable / 38 quarantined larger-workbook rows.
 
 Release-impacting work also requires a read-only AGY review with Gemini 3.5 Flash High. AGY is advisory; every comment must be adjudicated and validated fixes must be retested.
 

@@ -89,7 +89,7 @@ Append new implementation or data insights here as they are discovered.
 - Initial workbook profile: `P_accessions_new.xlsx` has one main data sheet, `P_accesions`, plus self-documenting `Column headers` and `Data types` sheets.
 - Current local workbook grain is one propagation accession plus one treatment per row.
 - Current local workbook profile found 128 core trial rows, 53 propagation accessions, 52 species, and 17 treatment strings.
-- v0.3 workbook acceptance includes the larger `P_accessions_ready.xlsx` profile: 2,204 populated records, 2,166 analyzable rows, and 38 quarantined rows with missing required treatment evidence.
+- v0.4 source workbook acceptance includes the larger `P_accessions_ready.xlsx` profile: 2,204 populated records, 2,166 analyzable rows, and 38 quarantined rows with missing required treatment evidence.
 - Header aliases must preserve source accession, status, and location variants such as `UorSBacc`, `D/ND`, and `L(R:C;Z)`.
 - Advanced Analysis being blank for a real workbook is usually a parser/scope/eligibility problem to investigate, not an acceptable empty state. Refresh legacy imports so `D/ND`, source accession, propagule type, codebook eligibility, and provenance are present.
 - Early paired analysis showed cold stratification vs control as a strong candidate signal: 38 paired comparisons, 24 improved, 11 tied, 3 worse, mean `PC` lift about `+1.68`.
