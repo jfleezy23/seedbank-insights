@@ -87,7 +87,11 @@ export interface QuarantinedRow {
   sourceAccession: string | null;
   species: string | null;
   treatment: string | null;
+  /** Displayed source values retained for correction and audit. */
+  rawCellValues: Record<string, string | number | boolean | null>;
 }
+
+export type QuarantinedPreviewRow = Omit<QuarantinedRow, "rawCellValues">;
 
 export interface WorkbookSource {
   id: number;
@@ -117,9 +121,10 @@ export interface ImportPreview {
   candidates: WorkbookCandidate[];
   populatedRows: number;
   acceptedRows: number;
-  quarantinedRows: QuarantinedRow[];
+  quarantinedRows: QuarantinedPreviewRow[];
   issues: DataQualityIssue[];
   unchangedSourceId: number | null;
+  requiresReprocessing?: boolean;
   duplicateCandidates: number[];
 }
 
@@ -128,7 +133,11 @@ export interface AnalysisScope {
   name: string;
   batchIds: number[];
   workbookHashes: string[];
+  importVersions: Array<{ batchId: number; workbookHash: string; importFormatVersion: number }>;
+  requiresReprocessing: boolean;
   scopeHash: string;
+  codebookHash: string;
+  codebookVersion: number;
   isCombined: boolean;
   createdAt: string;
 }
@@ -318,6 +327,8 @@ export interface ImportBatchSummary {
   worksheetName?: string;
   populatedRowCount?: number;
   quarantinedRowCount?: number;
+  /** Version of the deterministic importer that produced the derived rows. */
+  importFormatVersion?: number;
 }
 
 export interface ImportResult {
@@ -331,6 +342,7 @@ export interface ImportResult {
 export interface TreatmentSummary {
   treatment: string;
   propaguleType?: PropaguleType;
+  pcScale?: PropagationScoreScale | "mixed" | null;
   rows: number;
   species: number;
   accessions: number;
@@ -431,6 +443,14 @@ export interface AdvancedPairRow {
   worksheet: string;
   workbookHash: string;
   sourceRows: string;
+  baselineSourceFilename: string;
+  baselineWorksheet: string;
+  baselineWorkbookHash: string;
+  baselineSourceRows: string;
+  treatmentSourceFilename: string;
+  treatmentWorksheet: string;
+  treatmentWorkbookHash: string;
+  treatmentSourceRows: string;
 }
 
 export interface AdvancedSpeciesRow {
@@ -459,6 +479,7 @@ export interface TrialQueueItem {
 
 export interface SpeciesResearchCacheStatus {
   batchId: number | null;
+  scopeHash: string | null;
   cacheVersion: string;
   totalSpecies: number;
   researchedSpecies: number;

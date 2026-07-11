@@ -1720,6 +1720,17 @@ td strong {
 }
 
 .table-scroll { overflow-x: auto; }
+.analysis-refresh-notice {
+  display: grid;
+  gap: 8px;
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid #b9770e;
+  border-left: 4px solid #b9770e;
+  background: #fff8e8;
+}
+.analysis-refresh-notice p { margin: 0; color: var(--muted); }
+.analysis-refresh-notice button { justify-self: start; }
 .advanced-table { width: 100%; border-collapse: collapse; }
 .advanced-table th,
 .advanced-table td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }

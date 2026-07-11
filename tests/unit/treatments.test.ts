@@ -37,4 +37,16 @@ describe("parseTreatment", () => {
     expect(parsed.hasCold).toBe(true);
     expect(parsed.warnings).toHaveLength(0);
   });
+
+  it("recognizes hot-water H2O tokens and the legacy H20 spelling", () => {
+    const h2o = parseTreatment("H2O + CS");
+    const h20 = parseTreatment("H20 + CS");
+
+    expect(h2o.hasHotWater).toBe(true);
+    expect(h2o.tokens).toEqual(["H2O", "CS"]);
+    expect(h2o.warnings).toHaveLength(0);
+    expect(h20.hasHotWater).toBe(true);
+    expect(h20.tokens).toEqual(["H2O", "CS"]);
+    expect(h20.warnings).toHaveLength(0);
+  });
 });

@@ -1,6 +1,10 @@
 import type { PairedComparison } from "../core/types";
 import { ConfidenceBadge } from "./ConfidenceBadge";
 
+function directionPercentage(count: number, total: number): number {
+  return total > 0 ? (count / total) * 100 : 0;
+}
+
 export function PairedComparisonPanel({ comparisons }: { comparisons: PairedComparison[] }) {
   const primary = comparisons[0];
   return (
@@ -21,13 +25,13 @@ export function PairedComparisonPanel({ comparisons }: { comparisons: PairedComp
             <small>mean PC lift, n={primary.n}, CI {primary.ciLow} to {primary.ciHigh}</small>
           </div>
           <div className="direction-bars" aria-label="Comparison direction counts">
-            <span style={{ "--bar": `${(primary.improved / primary.n) * 100}%` } as React.CSSProperties}>
+            <span style={{ "--bar": `${directionPercentage(primary.improved, primary.n)}%` } as React.CSSProperties}>
               Improved {primary.improved}
             </span>
-            <span style={{ "--bar": `${(primary.tied / primary.n) * 100}%` } as React.CSSProperties}>
+            <span style={{ "--bar": `${directionPercentage(primary.tied, primary.n)}%` } as React.CSSProperties}>
               Tied {primary.tied}
             </span>
-            <span style={{ "--bar": `${(primary.worse / primary.n) * 100}%` } as React.CSSProperties}>
+            <span style={{ "--bar": `${directionPercentage(primary.worse, primary.n)}%` } as React.CSSProperties}>
               Worse {primary.worse}
             </span>
           </div>

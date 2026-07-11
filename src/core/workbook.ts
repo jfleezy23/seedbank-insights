@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import ExcelJS from "exceljs";
 import { z } from "zod";
@@ -27,6 +27,15 @@ export const REQUIRED_HEADERS = [
   "TTD",
   "PC"
 ];
+export const WORKBOOK_IMPORT_FORMAT_VERSION = 3;
+export const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
+
+const MAX_XLSX_ARCHIVE_ENTRIES = 2_000;
+const MAX_XLSX_ENTRY_UNCOMPRESSED_BYTES = 50 * 1024 * 1024;
+const MAX_XLSX_UNCOMPRESSED_BYTES = 100 * 1024 * 1024;
+const MAX_WORKSHEETS = 100;
+const MAX_POPULATED_ROWS_PER_WORKSHEET = 100_000;
+const MAX_POPULATED_CELLS_PER_WORKSHEET = 1_000_000;
 
 const TrialStatusSchema = z.union([z.literal("D"), z.literal("ND")]).nullable();
 const HEADER_ALIAS_GROUPS: Array<[string, string[]]> = [
@@ -87,8 +96,16 @@ function canonicalHeaderWithAliases(header: unknown, aliases: Record<string, str
 
 function valueFromCell(cell: ExcelJS.Cell): unknown {
   const value = cell.value;
+  if (value && typeof value === "object" && "formula" in value) {
+    const formula = (value as { formula?: unknown }).formula;
+    const result = (value as { result?: unknown }).result;
+    // Excel files can legitimately contain formulas without a cached result.
+    // Preserve the formula as evidence instead of silently converting the cell
+    // to an empty value during import.
+    return result ?? (formula === undefined ? value : `=${String(formula)}`);
+  }
   if (value && typeof value === "object" && "result" in value) {
-    return (value as { result?: unknown }).result ?? null;
+    return (value as { result?: unknown }).result ?? value;
   }
   return value;
 }
@@ -205,6 +222,22 @@ export interface ImportWorkbookOptions {
   sourcePath?: string;
 }
 
+interface WorkbookCandidateDetail {
+  worksheet: ExcelJS.Worksheet;
+  headers: string[];
+  missingHeaders: string[];
+  populatedRows: number;
+  headerCoverage: number;
+}
+
+export interface PreparedWorkbook {
+  filePath: string;
+  workbookHash: string;
+  workbook: ExcelJS.Workbook;
+  worksheet: ExcelJS.Worksheet;
+  candidates: WorkbookCandidateDetail[];
+}
+
 function canonicalPropaguleType(value: unknown): { raw: string | null; canonical: PropaguleType } {
   const raw = stringValue(value);
   const token = raw?.trim().toLowerCase() ?? "";
@@ -299,8 +332,10 @@ function buildTrial(
       species,
       family,
       treatment,
+      num: numberValue(get(row, "Num")),
       startDate,
       propaguleType: propagule.canonical,
+      location: stringValue(get(row, "Location")),
       status: statusValue(get(row, "Status")),
       pc: pc.value,
       lpc: lpc.value,
@@ -490,23 +525,29 @@ function dataQualityFromTrials(trials: TrialRecord[]): DataQualityIssue[] {
   return issues;
 }
 
-function populatedRows(worksheet: ExcelJS.Worksheet): number {
-  let count = 0;
-  for (let rowNumber = 2; rowNumber <= worksheet.actualRowCount; rowNumber += 1) {
-    const row = worksheet.getRow(rowNumber);
-    const values = Array.isArray(row.values) ? row.values.slice(1) : Object.values(row.values);
-    if (values.some((value: unknown) => stringValue(value) !== null)) count += 1;
-  }
-  return count;
+function populatedRows(worksheet: ExcelJS.Worksheet): ExcelJS.Row[] {
+  const rows: ExcelJS.Row[] = [];
+  let populatedCells = 0;
+  worksheet.eachRow({ includeEmpty: false }, (row) => {
+    if (row.number === 1) return;
+    let populated = false;
+    row.eachCell({ includeEmpty: false }, (cell) => {
+      populatedCells += 1;
+      if (stringValue(valueFromCell(cell)) !== null) populated = true;
+    });
+    if (populatedCells > MAX_POPULATED_CELLS_PER_WORKSHEET) {
+      throw new Error("Workbook worksheet exceeds the 1,000,000 populated-cell import limit.");
+    }
+    if (!populated) return;
+    rows.push(row);
+    if (rows.length > MAX_POPULATED_ROWS_PER_WORKSHEET) {
+      throw new Error("Workbook worksheet exceeds the 100,000 populated-row import limit.");
+    }
+  });
+  return rows;
 }
 
-function workbookCandidates(workbook: ExcelJS.Workbook): Array<{
-  worksheet: ExcelJS.Worksheet;
-  headers: string[];
-  missingHeaders: string[];
-  populatedRows: number;
-  headerCoverage: number;
-}> {
+function workbookCandidates(workbook: ExcelJS.Workbook): WorkbookCandidateDetail[] {
   return workbook.worksheets
     .map((worksheet) => {
       const headers = readHeaders(worksheet);
@@ -515,7 +556,7 @@ function workbookCandidates(workbook: ExcelJS.Workbook): Array<{
         worksheet,
         headers,
         missingHeaders,
-        populatedRows: populatedRows(worksheet),
+        populatedRows: populatedRows(worksheet).length,
         headerCoverage: REQUIRED_HEADERS.length - missingHeaders.length
       };
     })
@@ -528,16 +569,101 @@ function workbookCandidates(workbook: ExcelJS.Workbook): Array<{
     );
 }
 
-async function openWorkbook(
-  filePath: string,
-  requestedWorksheet?: string
-): Promise<{
-  workbook: ExcelJS.Workbook;
-  worksheet: ExcelJS.Worksheet;
-  candidates: ReturnType<typeof workbookCandidates>;
-}> {
+function readUInt16(buffer: Uint8Array, offset: number, message: string): number {
+  if (offset < 0 || offset + 2 > buffer.length) throw new Error(message);
+  return buffer[offset] | (buffer[offset + 1] << 8);
+}
+
+function readUInt32(buffer: Uint8Array, offset: number, message: string): number {
+  if (offset < 0 || offset + 4 > buffer.length) throw new Error(message);
+  return (buffer[offset] | (buffer[offset + 1] << 8) | (buffer[offset + 2] << 16) | (buffer[offset + 3] << 24)) >>> 0;
+}
+
+function assertXlsxArchiveBounds(buffer: Uint8Array): void {
+  const eocdSignature = 0x06054b50;
+  const centralDirectorySignature = 0x02014b50;
+  const minimumEocdLength = 22;
+  const searchStart = Math.max(0, buffer.length - minimumEocdLength - 0xffff);
+  let eocdOffset = -1;
+  for (let offset = buffer.length - minimumEocdLength; offset >= searchStart; offset -= 1) {
+    if (readUInt32(buffer, offset, "Workbook archive is malformed.") === eocdSignature) {
+      eocdOffset = offset;
+      break;
+    }
+  }
+  if (eocdOffset < 0) throw new Error("Workbook must be a valid .xlsx ZIP archive.");
+
+  const entryCount = readUInt16(buffer, eocdOffset + 10, "Workbook archive is malformed.");
+  const centralDirectorySize = readUInt32(buffer, eocdOffset + 12, "Workbook archive is malformed.");
+  const centralDirectoryOffset = readUInt32(buffer, eocdOffset + 16, "Workbook archive is malformed.");
+  if (entryCount === 0xffff || centralDirectorySize === 0xffffffff || centralDirectoryOffset === 0xffffffff) {
+    throw new Error("ZIP64 workbooks are not supported by the prototype import limit.");
+  }
+  if (entryCount > MAX_XLSX_ARCHIVE_ENTRIES) {
+    throw new Error(`Workbook archive exceeds the ${MAX_XLSX_ARCHIVE_ENTRIES.toLocaleString()} entry import limit.`);
+  }
+  const centralDirectoryEnd = centralDirectoryOffset + centralDirectorySize;
+  if (centralDirectoryEnd > eocdOffset || centralDirectoryEnd < centralDirectoryOffset) {
+    throw new Error("Workbook archive has an invalid central directory.");
+  }
+
+  let cursor = centralDirectoryOffset;
+  let expandedBytes = 0;
+  for (let index = 0; index < entryCount; index += 1) {
+    if (readUInt32(buffer, cursor, "Workbook archive has a truncated central directory.") !== centralDirectorySignature) {
+      throw new Error("Workbook archive has an invalid central directory entry.");
+    }
+    const flags = readUInt16(buffer, cursor + 8, "Workbook archive has a truncated central directory entry.");
+    const compressedBytes = readUInt32(buffer, cursor + 20, "Workbook archive has a truncated central directory entry.");
+    const uncompressedBytes = readUInt32(buffer, cursor + 24, "Workbook archive has a truncated central directory entry.");
+    const filenameBytes = readUInt16(buffer, cursor + 28, "Workbook archive has a truncated central directory entry.");
+    const extraBytes = readUInt16(buffer, cursor + 30, "Workbook archive has a truncated central directory entry.");
+    const commentBytes = readUInt16(buffer, cursor + 32, "Workbook archive has a truncated central directory entry.");
+    if (flags & 0x1) throw new Error("Encrypted workbooks are not supported.");
+    if (uncompressedBytes > MAX_XLSX_ENTRY_UNCOMPRESSED_BYTES) {
+      throw new Error("Workbook archive contains an entry that exceeds the 50 MB expanded import limit.");
+    }
+    expandedBytes += uncompressedBytes;
+    if (expandedBytes > MAX_XLSX_UNCOMPRESSED_BYTES) {
+      throw new Error("Workbook archive exceeds the 100 MB expanded import limit.");
+    }
+    const entryLength = 46 + filenameBytes + extraBytes + commentBytes;
+    if (compressedBytes > MAX_WORKBOOK_BYTES || cursor + entryLength > centralDirectoryEnd) {
+      throw new Error("Workbook archive has an invalid central directory entry.");
+    }
+    cursor += entryLength;
+  }
+  if (cursor !== centralDirectoryEnd) throw new Error("Workbook archive has an invalid central directory.");
+}
+
+export function inspectPreparedWorkbookCandidates(prepared: PreparedWorkbook): WorkbookCandidate[] {
+  return prepared.candidates.map((candidate) => ({
+    worksheetName: candidate.worksheet.name,
+    headerCoverage: candidate.headerCoverage,
+    populatedRows: candidate.populatedRows,
+    missingHeaders: candidate.missingHeaders,
+    selected: candidate.worksheet.name === prepared.worksheet.name
+  }));
+}
+
+export async function prepareWorkbook(filePath: string, requestedWorksheet?: string): Promise<PreparedWorkbook> {
+  if (path.extname(filePath).toLowerCase() !== ".xlsx") {
+    throw new Error("Only .xlsx workbook imports are supported.");
+  }
+  const fileStat = await stat(filePath);
+  if (!fileStat.isFile()) throw new Error("Selected workbook path is not a file.");
+  if (fileStat.size > MAX_WORKBOOK_BYTES) {
+    throw new Error("Workbook is larger than the 25 MB prototype import limit.");
+  }
+  const buffer = Buffer.from(await readFile(filePath));
+  assertXlsxArchiveBounds(buffer);
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
+  // ExcelJS 4 declares the pre-generic Node Buffer type; TypeScript 6's Buffer
+  // is runtime-compatible but no longer structurally assignable to that type.
+  await workbook.xlsx.load(buffer as never);
+  if (workbook.worksheets.length > MAX_WORKSHEETS) {
+    throw new Error(`Workbook exceeds the ${MAX_WORKSHEETS} worksheet import limit.`);
+  }
   const candidates = workbookCandidates(workbook);
   const worksheet = requestedWorksheet
     ? candidates.find((candidate) => candidate.worksheet.name === requestedWorksheet)?.worksheet
@@ -545,7 +671,13 @@ async function openWorkbook(
   if (!worksheet) {
     throw new Error("No propagation accession worksheet found.");
   }
-  return { workbook, worksheet, candidates };
+  return {
+    filePath,
+    workbookHash: createHash("sha256").update(buffer).digest("hex"),
+    workbook,
+    worksheet,
+    candidates
+  };
 }
 
 function readHeaders(worksheet: ExcelJS.Worksheet, aliases: Record<string, string> = {}): string[] {
@@ -563,7 +695,11 @@ function missingRequiredHeaders(headers: string[]): string[] {
 }
 
 export async function inspectWorkbookHeaders(filePath: string): Promise<WorkbookHeaderProfile> {
-  const { worksheet } = await openWorkbook(filePath);
+  return inspectPreparedWorkbookHeaders(await prepareWorkbook(filePath));
+}
+
+export function inspectPreparedWorkbookHeaders(prepared: PreparedWorkbook): WorkbookHeaderProfile {
+  const { worksheet } = prepared;
   const headers = readHeaders(worksheet);
   return {
     worksheetName: worksheet.name,
@@ -573,9 +709,15 @@ export async function inspectWorkbookHeaders(filePath: string): Promise<Workbook
 }
 
 export async function importWorkbook(filePath: string, options: ImportWorkbookOptions = {}): Promise<ImportResult> {
-  const buffer = await readFile(filePath);
-  const workbookHash = createHash("sha256").update(buffer).digest("hex");
-  const { worksheet } = await openWorkbook(filePath, options.worksheetName);
+  return importPreparedWorkbook(await prepareWorkbook(filePath, options.worksheetName), options);
+}
+
+export function importPreparedWorkbook(prepared: PreparedWorkbook, options: ImportWorkbookOptions = {}): ImportResult {
+  const worksheet = options.worksheetName
+    ? prepared.candidates.find((candidate) => candidate.worksheet.name === options.worksheetName)?.worksheet
+    : prepared.worksheet;
+  if (!worksheet) throw new Error("Selected worksheet is not a compatible propagation accession sheet.");
+  const workbookHash = prepared.workbookHash;
 
   const headers = readHeaders(worksheet, options.headerAliases ?? {});
 
@@ -584,18 +726,27 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
   const trials: TrialRecord[] = [];
   const quarantinedRows: QuarantinedRow[] = [];
   let populatedRowCount = 0;
-  for (let rowNumber = 2; rowNumber <= worksheet.actualRowCount; rowNumber += 1) {
-    const row = worksheet.getRow(rowNumber);
+  for (const row of populatedRows(worksheet)) {
+    const rowNumber = row.number;
     const mapped = new Map<string, unknown>();
     headers.forEach((header, index) => {
       if (!header) return;
       mapped.set(normalizeHeader(header), valueFromCell(row.getCell(index)));
     });
+    const rawCellValues = Object.fromEntries(
+      [...mapped.entries()].map(([header, value]) => [
+        header,
+        typeof value === "number" || typeof value === "boolean" ? value : stringValue(value)
+      ])
+    );
+    // Do not use Excel's formatted row count or only the identity cells to
+    // decide whether a row exists. A partially populated source row belongs in
+    // quarantine, where its original evidence remains visible.
+    if (!Object.values(rawCellValues).some((value) => value !== null && value !== "")) continue;
     const pAccession = stringValue(get(mapped, "P_Accession"));
     const sourceAccession = stringValue(get(mapped, "Source_Accession"));
     const species = stringValue(get(mapped, "Species"));
     const treatment = stringValue(get(mapped, "Trt"));
-    if (![pAccession, sourceAccession, species, treatment].some(Boolean)) continue;
     populatedRowCount += 1;
     const malformedSpecies = Boolean(species) && (species!.length < 3 || !/[A-Za-z]/.test(species!) || species === "[object Object]");
     const reasons = [
@@ -612,13 +763,14 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
         pAccession,
         sourceAccession,
         species,
-        treatment
+        treatment,
+        rawCellValues
       });
       continue;
     }
     const trial = buildTrial(mapped, rowNumber, worksheet.name, workbookHash, {
       ...options,
-      sourcePath: options.sourcePath ?? filePath
+      sourcePath: options.sourcePath ?? prepared.filePath
     });
     if (trial) trials.push(trial);
   }
@@ -636,11 +788,30 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
   }
   for (const rows of duplicateGroups.values()) {
     if (rows.length < 2) continue;
-    const fingerprints = rows.map((trial) => JSON.stringify(trial.normalizedCellValues));
-    const ambiguous = new Set(fingerprints).size < fingerprints.length;
+    // Outcome fields must never be used to decide whether rows are independent
+    // replicates. Treat rows as genuine only when non-outcome design evidence
+    // distinguishes every row; otherwise they remain auditable but excluded
+    // from formal inference pending review.
+    const byFingerprint = new Map<string, TrialRecord[]>();
     for (const trial of rows) {
-      trial.replicateClassification = ambiguous ? "ambiguous_duplicate" : "genuine_replicate";
-      if (ambiguous) trial.validationWarnings?.push("Ambiguous duplicate row");
+      const fingerprint = JSON.stringify({
+        num: trial.num,
+        startDate: trial.startDate,
+        ced: trial.ced,
+        wsed: trial.wsed,
+        csed: trial.csed,
+        linerStart: trial.linerStart,
+        fourStart: trial.fourStart,
+        location: trial.location
+      });
+      byFingerprint.set(fingerprint, [...(byFingerprint.get(fingerprint) ?? []), trial]);
+    }
+    for (const fingerprintRows of byFingerprint.values()) {
+      const ambiguous = fingerprintRows.length > 1;
+      for (const trial of fingerprintRows) {
+        trial.replicateClassification = ambiguous ? "ambiguous_duplicate" : "genuine_replicate";
+        if (ambiguous) trial.validationWarnings?.push("Ambiguous duplicate row");
+      }
     }
   }
 
@@ -652,7 +823,7 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
     if (!trials.some((trial) => trial[field.scale] === "percent_0_100")) continue;
     for (const trial of trials) {
       const raw = trial[field.raw];
-      if (trial[field.scale] === "ordinal_0_5" && typeof raw === "number" && raw > 0) {
+      if (trial[field.scale] === "ordinal_0_5" && typeof raw === "number" && raw !== 0) {
         trial[field.value] = null;
         trial[field.scale] = "ambiguous";
         trial.validationWarnings?.push(`Ambiguous ${field.value.toUpperCase()} score scale`);
@@ -687,7 +858,7 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
 
   return {
     batch: {
-      filename: path.basename(filePath),
+      filename: path.basename(prepared.filePath),
       importedAt: new Date().toISOString(),
       workbookHash,
       rowCount: trials.length,
@@ -697,10 +868,11 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
       warnings: issues.map((issue) => issue.title)
       ,
       sourceId: options.sourceId,
-      sourcePath: options.sourcePath ?? filePath,
+      sourcePath: options.sourcePath ?? prepared.filePath,
       worksheetName: worksheet.name,
       populatedRowCount,
       quarantinedRowCount: quarantinedRows.length
+      ,importFormatVersion: WORKBOOK_IMPORT_FORMAT_VERSION
     },
     trials,
     observations,
@@ -710,32 +882,5 @@ export async function importWorkbook(filePath: string, options: ImportWorkbookOp
 }
 
 export async function inspectWorkbookCandidates(filePath: string): Promise<WorkbookCandidate[]> {
-  const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.readFile(filePath);
-  return workbook.worksheets
-    .map((worksheet) => {
-      const headers = readHeaders(worksheet);
-      const coverage = REQUIRED_HEADERS.filter((required) =>
-        headers.some((header) => normalizeHeader(header) === normalizeHeader(required))
-      ).length;
-      let populatedRows = 0;
-      for (let rowNumber = 2; rowNumber <= worksheet.actualRowCount; rowNumber += 1) {
-        const row = worksheet.getRow(rowNumber);
-        let populated = false;
-        row.eachCell({ includeEmpty: false }, (cell) => {
-          if (stringValue(valueFromCell(cell))) populated = true;
-        });
-        if (populated) populatedRows += 1;
-      }
-      return {
-        worksheetName: worksheet.name,
-        headerCoverage: coverage,
-        populatedRows,
-        missingHeaders: missingRequiredHeaders(headers),
-        selected: false
-      };
-    })
-    .filter((candidate) => candidate.headerCoverage > 0 || candidate.populatedRows > 0)
-    .sort((a, b) => b.headerCoverage - a.headerCoverage || b.populatedRows - a.populatedRows)
-    .map((candidate, index) => ({ ...candidate, selected: index === 0 }));
+  return inspectPreparedWorkbookCandidates(await prepareWorkbook(filePath));
 }

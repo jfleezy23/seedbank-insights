@@ -99,10 +99,42 @@ try {
   const first = db.saveImport(importResult("first.xlsx"));
   const second = db.saveImport(importResult("second.xlsx"));
   const unchanged = db.saveImport(importResult("first.xlsx"));
+  const copiedResult = importResult("copied-first.xlsx");
+  copiedResult.batch.workbookHash = "first.xlsx";
+  const copied = db.saveImport(copiedResult);
 
   if (first.batch?.id !== 1) throw new Error(`Expected first batch id 1, got ${first.batch?.id}`);
   if (second.batch?.id !== 2) throw new Error(`Expected second batch id 2, got ${second.batch?.id}`);
   if (unchanged.batch?.id !== 1) throw new Error("Matching source content created a duplicate version");
+  if (copied.batch?.id !== 1) throw new Error("Matching content at a different path created a duplicate version");
+  const scopeHashBeforeRefresh = db.getDatasetState().scopes.find((scope) => scope.batchIds.includes(1)).scopeHash;
+  const originalBatch = db.getImportResult(1).batch;
+  const parserRefresh = importResult("first.xlsx");
+  parserRefresh.batch.importFormatVersion = 2;
+  parserRefresh.batch.sourceId = originalBatch.sourceId;
+  parserRefresh.batch.sourcePath = path.join(dir, "relinked-first.xlsx");
+  parserRefresh.batch.filename = "relinked-first.xlsx";
+  parserRefresh.batch.worksheetName = "Replacement sheet";
+  parserRefresh.trials[0].status = "ND";
+  const refreshed = db.saveImport(parserRefresh);
+  if (refreshed.batch?.id !== 1 || refreshed.batch?.importFormatVersion !== 2) {
+    throw new Error("Parser refresh did not update the existing immutable batch in place");
+  }
+  if (db.getImportResult(1)?.trials[0].status !== "ND") {
+    throw new Error("Parser refresh did not replace stale derived trial fields");
+  }
+  const refreshedBatch = db.getImportResult(1).batch;
+  if (
+    refreshedBatch.filename !== originalBatch.filename ||
+    refreshedBatch.sourcePath !== originalBatch.sourcePath ||
+    refreshedBatch.worksheetName !== originalBatch.worksheetName
+  ) {
+    throw new Error("Parser refresh rewrote immutable batch provenance");
+  }
+  const refreshedScope = db.getDatasetState().scopes.find((scope) => scope.batchIds.includes(1));
+  if (refreshedScope.scopeHash === scopeHashBeforeRefresh || refreshedScope.importVersions[0].importFormatVersion !== 2) {
+    throw new Error("Parser refresh did not change the scope identity and version provenance");
+  }
   if (db.getDashboard(1).metrics.trials !== 2) throw new Error("First batch trial count changed");
   if (db.getDashboard(2).metrics.trials !== 2) throw new Error("Second batch trial count changed");
   const issueTitles = db.getDashboard(2).dataQualityIssues.map((issue) => issue.title);
@@ -125,6 +157,25 @@ try {
   }
   if (reconstructed.trials[1].rawCellValues?.pc !== 5) {
     throw new Error("Raw and normalized cell evidence did not survive persistence");
+  }
+  const delayedCodebookImport = importResult("codebook-refresh.xlsx", "P-codebook");
+  delayedCodebookImport.trials.forEach((row) => {
+    row.treatment = "ZZ";
+    row.treatmentComponents = parseTreatment("ZZ");
+    row.analysisEligibility = "descriptive_only";
+  });
+  db.saveTreatmentCodebookEntry({
+    version: 0,
+    propaguleType: "seed",
+    token: "ZZ",
+    label: "Synthetic treatment",
+    meaning: "Synthetic smoke-test token",
+    active: true
+  });
+  const codebookDashboard = db.saveImport(delayedCodebookImport);
+  const codebookBatchId = codebookDashboard.batch?.id;
+  if (!codebookBatchId || db.getImportResult(codebookBatchId).trials.some((row) => row.analysisEligibility !== "eligible")) {
+    throw new Error("Import commit did not recalculate treatment eligibility using the current codebook");
   }
   let overlapBlocked = false;
   try {
@@ -172,6 +223,10 @@ try {
     ALTER TABLE trials DROP COLUMN four_pc_raw;
     ALTER TABLE trials DROP COLUMN four_pc_scale;
     ALTER TABLE data_quality_issues DROP COLUMN metadata_json;
+    UPDATE import_batches SET import_format_version = 1;
+    DELETE FROM analysis_scope_batches;
+    DELETE FROM analysis_scopes;
+    DELETE FROM app_state WHERE key = 'active_scope_id';
     PRAGMA user_version = 1;
   `);
   rawLegacy.close();
@@ -185,6 +240,13 @@ try {
   const migratedScore = migratedImport.trials.find((item) => item.sourceRow === 3);
   if (migratedScore?.pc !== 3 || migratedScore.pcRaw !== 50 || migratedScore.pcScale !== "percent_0_100") {
     throw new Error("Legacy percentage score migration did not preserve and normalize the raw value");
+  }
+  const migratedState = migratedLegacy.getDatasetState();
+  if (migratedState.scopes.length !== 1 || migratedState.activeScopeId !== migratedState.scopes[0].id) {
+    throw new Error("Legacy batches were not migrated into separate active analysis scopes");
+  }
+  if (!migratedState.scopes[0].requiresReprocessing) {
+    throw new Error("Legacy parser versions must require an explicit parser-refresh import");
   }
   migratedLegacy.close();
 

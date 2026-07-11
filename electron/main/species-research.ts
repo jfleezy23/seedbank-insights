@@ -124,6 +124,7 @@ export async function summarizeSpeciesResearchCacheStatus({
 
   return {
     batchId: batch.id ?? null,
+    scopeHash: null,
     cacheVersion,
     totalSpecies: speciesList.length,
     researchedSpecies: speciesList.length - missingSpecies.length,

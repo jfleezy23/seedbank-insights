@@ -7,12 +7,16 @@ function numberAfter(prefix: string, token: string): number | null {
   return match ? Number(match[1]) : null;
 }
 
+function normalizeToken(token: string): string {
+  return token === "H20" ? "H2O" : token;
+}
+
 export const BUILT_IN_TREATMENT_CODEBOOK: TreatmentCodebookEntry[] = [
   ["seed", "C", "Control", "Untreated seed control"],
   ["seed", "CS", "Cold stratification", "Cold stratification; default duration comes from the workbook codebook"],
   ["seed", "WS", "Warm stratification", "Warm stratification; default duration comes from the workbook codebook"],
   ["seed", "GA", "Gibberellic acid", "Gibberellic acid treatment"],
-  ["seed", "H20", "Hot water", "Near-boiling water soak"],
+  ["seed", "H2O", "Hot water", "Near-boiling water soak"],
   ["seed", "SCAR", "Scarification", "Mechanical scarification"],
   ["seed", "C->WS", "Control to warm stratification", "Control observation followed by warm stratification"],
   ["stem_cutting", "C", "No auxin", "Cutting control with no auxin"],
@@ -51,7 +55,7 @@ export function parseTreatment(
   const tokens = raw
     .toUpperCase()
     .split(TOKEN_SPLIT)
-    .map((token) => token.trim())
+    .map((token) => normalizeToken(token.trim()))
     .filter(Boolean);
   const normalized = tokens.join("+");
   const warnings: string[] = [];
@@ -60,7 +64,7 @@ export function parseTreatment(
   const hasWarm = tokens.some((token) => token === "WS" || /^WS\d+$/.test(token) || token.endsWith("->WS"));
   const hasScarWh = tokens.includes("SCARWH");
   const hasScarification = hasScarWh || tokens.some((token) => token === "SCAR");
-  const hasHotWater = hasScarWh || tokens.includes("H20") || tokens.includes("HOTWATER");
+  const hasHotWater = hasScarWh || tokens.includes("H2O") || tokens.includes("HOTWATER");
   const hasGa = tokens.some((token) => /^GA-?\d*$/.test(token));
   const isControl = tokens.length === 1 ? tokens[0] === "C" : tokens[tokens.length - 1] === "C";
 
@@ -86,7 +90,7 @@ export function parseTreatment(
       token === "WS" ||
       token === "SCAR" ||
       token === "SCARWH" ||
-      token === "H20" ||
+      token === "H2O" ||
       /^GA-?\d*$/.test(token) ||
       /^CS\d+$/.test(token) ||
       /^WS\d+$/.test(token)

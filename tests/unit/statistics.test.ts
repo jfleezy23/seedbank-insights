@@ -58,6 +58,14 @@ describe("pairedComparison", () => {
     expect(comparison.falsePositiveRisk).toMatch(/Elevated/);
   });
 
+  it("rejects mixed propagule inputs instead of pooling their outcomes", () => {
+    const seedControl = trial("P1", "Species one", "C", 1);
+    const seedTreatment = trial("P1", "Species one", "CS", 4);
+    const cuttingControl = trial("Q1", "Cutting one", "C", 1, { propaguleType: "stem cutting" });
+
+    expect(() => pairedComparison([seedControl, seedTreatment, cuttingControl], "C", "CS")).toThrow(/one propagule type/i);
+  });
+
   it("does not promote mixed evidence to strong signal", () => {
     const trials = [
       trial("P1", "A", "CS", 5),
@@ -109,6 +117,21 @@ describe("pairedComparison", () => {
     expect(comparisons).toEqual(
       expect.arrayContaining([expect.objectContaining({ baseline: "C", treatment: "SMOKE", n: 2 })])
     );
+    expect(comparisons[0].examples.length).toBeGreaterThan(0);
+  });
+
+  it("does not dilute directional consistency with tied operational pairs", () => {
+    const trials = Array.from({ length: 10 }, (_, index) => [
+      trial(`P${index}`, `Species ${index}`, "C", 2),
+      trial(`P${index}`, `Species ${index}`, "CS", index < 5 ? 5 : 2)
+    ]).flat();
+
+    const comparison = pairedComparison(trials, "C", "CS");
+
+    expect(comparison.improved).toBe(5);
+    expect(comparison.tied).toBe(5);
+    expect(comparison.worse).toBe(0);
+    expect(comparison.confidence).toBe("Strong signal");
   });
 
   it("averages duplicate treatment rows before paired comparison", () => {
@@ -138,6 +161,31 @@ describe("pairedComparison", () => {
     );
     const summary = summarizeTreatments(trials)[0];
     expect(summary.confidence).toBe("Strong signal");
+  });
+
+  it("does not silently cap treatment summaries or trial queue items", () => {
+    const manyTreatments = Array.from({ length: 15 }, (_, index) =>
+      trial(`P${index}`, `Species ${index}`, `T${index}`, 2, { sourceRow: index + 1 })
+    );
+    const manyQueueItems = Array.from({ length: 25 }, (_, index) =>
+      trial(`Q${index}`, `Queue species ${index}`, "CS", null, {
+        sourceRow: index + 100,
+        status: "D"
+      })
+    );
+
+    expect(buildDashboardData(manyTreatments, [], null).treatmentSummaries).toHaveLength(15);
+    expect(buildTrialQueue(manyQueueItems)).toHaveLength(25);
+  });
+
+  it("preserves row-level PC score scale in treatment summaries", () => {
+    const summary = summarizeTreatments([
+      trial("P1", "Species one", "CS", 80, { pcScale: "percent_0_100" }),
+      trial("P2", "Species two", "CS", 60, { pcScale: "percent_0_100" })
+    ])[0];
+
+    expect(summary.pcScale).toBe("percent_0_100");
+    expect(summary.pcMean).toBe(70);
   });
 
   it("builds varied row-specific trial queue actions", () => {

@@ -4,15 +4,16 @@ This roadmap is intentionally conservative. SeedBank Insights should become more
 
 ## Now
 
-- stabilize workbook import and header normalization
+- stabilize multi-workbook import previews, quarantine visibility, codebook eligibility, and explicit analysis scopes
 - preserve raw workbook privacy in the public repo
 - keep CI green on synthetic fixtures
+- keep local real-workbook acceptance documented without committing private workbooks
 - harden OpenAI response validation and redaction
-- polish the main review surfaces for layout stability
+- polish Dataset Manager, Advanced Analysis, and data-quality surfaces for layout stability
 
 ## Next
 
-- expand deterministic treatment parsing coverage
+- expand documented propagule-specific treatment codebook coverage
 - add richer species drill-down views
 - improve data-quality issue grouping and filtering
 - add exportable review notes that cite source rows
@@ -21,7 +22,7 @@ This roadmap is intentionally conservative. SeedBank Insights should become more
 
 ## Later
 
-- compare import batches over time
+- compare import versions over time
 - add configurable workbook profile mappings
 - support additional seed-bank workbook formats
 - add richer non-AI report generation

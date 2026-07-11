@@ -46,7 +46,7 @@ export function buildDashboardData(
       doneRate: trials.length ? Math.round((doneCount / trials.length) * 100) / 100 : 0,
       observationsExtracted: observations.length
     },
-    treatmentSummaries: summarizeTreatments(trials).slice(0, 12),
+    treatmentSummaries: summarizeTreatments(trials),
     speciesSummaries,
     pairedComparisons,
     advancedComparisons: buildAdvancedComparisons(trials, true),

@@ -73,6 +73,7 @@ const emptyDashboard: DashboardData = {
   dataQualityIssues: [],
   askSuggestions: [],
   speciesInsights: [],
+  advancedComparisons: [],
   aiInsightStatus: {
     configured: false,
     state: "not_configured",
@@ -118,8 +119,12 @@ function deterministicTrialDesign(summary: SpeciesSummary | undefined): string {
   return "Repeat the current best treatment against control and the nearest alternative, then track liner and 4-inch survival.";
 }
 
-function researchKey(batchId: number | undefined, species: string): string {
-  return `${batchId ?? "sample"}:${species.toLowerCase()}`;
+function researchScopeIdentity(dashboard: DashboardData): string {
+  return dashboard.scope?.scopeHash ?? dashboard.batch?.workbookHash ?? "sample";
+}
+
+function researchKey(scopeIdentity: string, species: string): string {
+  return `${scopeIdentity}:${species.toLowerCase()}`;
 }
 
 function familySourceText(source: SpeciesResearchResult["familySource"] | undefined): string {
@@ -189,6 +194,8 @@ function SpeciesExplorer({
   const firstSpecies = speciesOptions[0]?.species ?? "";
   const [selectedSpecies, setSelectedSpecies] = useState(firstSpecies);
   const [speciesFilter, setSpeciesFilter] = useState("");
+  const scopeIdentity = researchScopeIdentity(dashboard);
+  const previousScopeIdentityRef = useRef(scopeIdentity);
   const filteredSpeciesOptions = useMemo(() => {
     const query = speciesFilter.trim().toLocaleLowerCase();
     if (!query) return speciesOptions;
@@ -200,11 +207,21 @@ function SpeciesExplorer({
       ? "Load cached AI research or add an OpenAI key to generate it."
       : "Select a species to run AI protocol research.";
   useEffect(() => {
-    if (!firstSpecies) return;
-    if (!speciesOptions.some((option) => option.species === selectedSpecies)) {
+    const scopeChanged = previousScopeIdentityRef.current !== scopeIdentity;
+    if (scopeChanged) previousScopeIdentityRef.current = scopeIdentity;
+    if (!firstSpecies) {
+      if (selectedSpecies) {
+        // eslint-disable-next-line react-hooks/set-state-in-effect
+        setSelectedSpecies("");
+      }
+      return;
+    }
+    if (scopeChanged || !speciesOptions.some((option) => option.species === selectedSpecies)) {
+      // The selected species belongs to the preceding scope; replace it with
+      // the first valid option after the asynchronous scope/data refresh.
       setSelectedSpecies(firstSpecies);
     }
-  }, [firstSpecies, selectedSpecies, speciesOptions]);
+  }, [firstSpecies, scopeIdentity, selectedSpecies, speciesOptions]);
 
   const selectedSummary =
     dashboard.speciesSummaries.find((summary) => summary.species === selectedSpecies) ?? speciesOptions[0]?.summary;
@@ -215,10 +232,10 @@ function SpeciesExplorer({
     [dashboard.speciesResearchCacheStatus?.missingSpecies]
   );
   const hasCacheStatus = Boolean(dashboard.speciesResearchCacheStatus?.totalSpecies);
-  const activeResearchKey = researchKey(dashboard.batch?.id, activeSpecies);
+  const activeResearchKey = researchKey(scopeIdentity, activeSpecies);
   const selectedResearch = researchResults[activeResearchKey];
   const selectedResearchError = researchErrors[activeResearchKey];
-  const isResearching = researchingSpecies === activeSpecies;
+  const isResearching = researchingSpecies === activeResearchKey;
   const cachedResearchAvailable = hasCacheStatus && !cacheMissingSpecies.has(activeSpecies);
   const canResearch =
     hasBatch &&
@@ -229,14 +246,14 @@ function SpeciesExplorer({
 
   useEffect(() => {
     if (!hasBatch || !activeSpecies || selectedResearch || selectedResearchError || isResearching) return;
-    if (!aiConfigured && !cachedResearchAvailable) return;
+    // Cached local research can load automatically. Live research remains an
+    // explicit user action and is confirmed in the privileged main process.
+    if (!cachedResearchAvailable) return;
     onResearchSpecies(activeSpecies, false);
   }, [
     activeSpecies,
-    aiConfigured,
-    cacheMissingSpecies,
+    cachedResearchAvailable,
     hasBatch,
-    hasCacheStatus,
     isResearching,
     onResearchSpecies,
     selectedResearch,
@@ -256,7 +273,7 @@ function SpeciesExplorer({
             {hasBatch ? (
               <button
                 type="button"
-                onClick={() => onResearchSpecies(activeSpecies, aiConfigured)}
+                onClick={() => onResearchSpecies(activeSpecies, Boolean(selectedResearch && aiConfigured))}
                 disabled={!canResearch}
               >
                 <RefreshCw size={16} />
@@ -299,7 +316,7 @@ function SpeciesExplorer({
                     <span>{option.species}</span>
                     <small>
                       {option.summary?.rows ?? 0} rows
-                      {researchResults[researchKey(dashboard.batch?.id, option.species)] ||
+                      {researchResults[researchKey(scopeIdentity, option.species)] ||
                       (hasCacheStatus && !cacheMissingSpecies.has(option.species))
                         ? " · researched"
                         : ""}
@@ -650,16 +667,72 @@ function SettingsModal({
   onSave: () => void;
   onClear: () => void;
 }) {
+  const dialogRef = useRef<HTMLElement>(null);
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    if (!open) return;
+
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        onClose();
+        return;
+      }
+
+      if (event.key !== "Tab") return;
+      const dialog = dialogRef.current;
+      if (!dialog) return;
+      const focusable = Array.from(
+        dialog.querySelectorAll<HTMLElement>(
+          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+        )
+      ).filter((element) => element.tabIndex >= 0);
+      if (!focusable.length) {
+        event.preventDefault();
+        return;
+      }
+
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const activeElement = document.activeElement;
+      if (event.shiftKey && (activeElement === first || !dialog.contains(activeElement))) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (activeElement === last || !dialog.contains(activeElement))) {
+        event.preventDefault();
+        first.focus();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+      returnFocusRef.current?.focus();
+      returnFocusRef.current = null;
+    };
+  }, [onClose, open]);
+
   if (!open) return null;
   return (
-    <div className="modal-backdrop" role="presentation">
-      <section className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+    <div
+      className="modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <section ref={dialogRef} className="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
         <div className="panel-heading">
           <div>
             <h2 id="settings-title">Settings</h2>
             <p>{safeStorageAvailable ? "OpenAI keys are stored with OS safe storage." : "OS safe storage is unavailable."}</p>
           </div>
-          <button type="button" aria-label="Close settings" onClick={onClose}>
+          <button ref={closeButtonRef} type="button" aria-label="Close settings" onClick={onClose}>
             <X size={18} />
           </button>
         </div>
@@ -696,6 +769,7 @@ function DatasetManager({
   onCommit,
   onCheckUpdate,
   onRelink,
+  onSelectWorksheet,
   onSelectScope,
   onCreateCombinedScope,
   onSaveCodebook
@@ -708,6 +782,7 @@ function DatasetManager({
   onCommit: () => void;
   onCheckUpdate: (sourceId: number) => void;
   onRelink: (sourceId: number) => void;
+  onSelectWorksheet: (token: string, worksheetName: string) => void;
   onSelectScope: (scopeId: number) => void;
   onCreateCombinedScope: () => void;
   onSaveCodebook: (entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">) => void;
@@ -750,7 +825,11 @@ function DatasetManager({
             <h3>Registered sources</h3>
             {dataset.sources.length ? dataset.sources.map((source) => (
               <article className="dataset-row" key={source.id}>
-                <div><strong>{source.label}</strong><small>{source.canonicalPath}</small></div>
+                <div>
+                  <strong>{source.label}</strong>
+                  <small>{source.canonicalPath}</small>
+                  <small>{source.available ? "Available" : "Unavailable or cloud-only — relink before importing."}</small>
+                </div>
                 <div className="import-actions"><button type="button" onClick={() => onCheckUpdate(source.id)} disabled={busy}>Check for updates</button><button type="button" onClick={() => onRelink(source.id)} disabled={busy}>Relink</button></div>
               </article>
             )) : <p>No workbook sources registered.</p>}
@@ -787,7 +866,24 @@ function DatasetManager({
                   <div><dt>Warnings</dt><dd>{preview.issues.length}</dd></div>
                 </dl>
                 {preview.duplicateCandidates.length ? <p>{preview.duplicateCandidates.length} ambiguous duplicate rows require classification.</p> : null}
-                {preview.unchangedSourceId ? <p>Content matches an existing source version; committing creates no duplicate.</p> : null}
+                {preview.requiresReprocessing ? <p>Content is unchanged, but this import uses an older parser. Commit to refresh derived fields in place without creating a duplicate version.</p> : preview.unchangedSourceId ? <p>Content matches an existing source version; committing creates no duplicate.</p> : null}
+                {preview.candidates.length > 1 ? (
+                  <label>
+                    Worksheet
+                    <select
+                      aria-label={`Worksheet for ${preview.filename}`}
+                      value={preview.worksheetName}
+                      onChange={(event) => onSelectWorksheet(preview.token, event.target.value)}
+                      disabled={busy}
+                    >
+                      {preview.candidates.map((candidate) => (
+                        <option key={candidate.worksheetName} value={candidate.worksheetName}>
+                          {candidate.worksheetName} ({candidate.populatedRows} rows; {candidate.headerCoverage} matching headers)
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                ) : null}
                 {preview.quarantinedRows.length ? <p>{preview.quarantinedRows.slice(0, 3).map((row) => `Row ${row.sourceRow}: ${row.reasons.join(", ")}`).join(" · ")}</p> : null}
               </article>
             ))}
@@ -812,12 +908,34 @@ function DatasetManager({
   );
 }
 
-function AdvancedAnalysis({ dashboard, busy, onExport }: { dashboard: DashboardData; busy: boolean; onExport: () => void }) {
+function AdvancedAnalysis({
+  dashboard,
+  busy,
+  onExport,
+  onOpenImports
+}: {
+  dashboard: DashboardData;
+  busy: boolean;
+  onExport: () => void;
+  onOpenImports: () => void;
+}) {
   const rows = dashboard.advancedComparisons ?? [];
+  const requiresReprocessing = Boolean(dashboard.scope?.requiresReprocessing);
+  const exportDisabled = busy || !dashboard.scope || requiresReprocessing || rows.length === 0;
   return (
     <section className="view-stack">
       <section className="panel">
-        <div className="panel-heading"><div><h2>Advanced Analysis</h2><p>Completed trials only; species-clustered uncertainty and Holm-adjusted exact sign tests.</p></div><div className="import-actions"><span className="scope-chip">{dashboard.scope?.name ?? dashboard.batch?.filename ?? "No scope"}</span><button type="button" onClick={onExport} disabled={busy || !dashboard.scope}><Download size={16} /> Export reproducible files</button></div></div>
+        <div className="panel-heading"><div><h2>Advanced Analysis</h2><p>Completed trials only; species-clustered uncertainty and Holm-adjusted exact sign tests.</p></div><div className="import-actions"><span className="scope-chip">{dashboard.scope?.name ?? dashboard.batch?.filename ?? "No scope"}</span><button type="button" onClick={onExport} disabled={exportDisabled}><Download size={16} /> Export reproducible files</button></div></div>
+        {requiresReprocessing ? (
+          <section className="analysis-refresh-notice" role="alert">
+            <strong>Analysis refresh required</strong>
+            <p>
+              This scope was imported by an older parser, so completed outcomes may be missing. Open Dataset Manager,
+              choose <em>Check for updates</em> for this source, review the parser-refresh preview, and import it.
+            </p>
+            <button type="button" onClick={onOpenImports} disabled={busy}>Open Dataset Manager</button>
+          </section>
+        ) : null}
         <div className="table-scroll">
           <table className="advanced-table">
             <thead><tr><th>Propagule</th><th>Contrast</th><th>Pairs / species</th><th>W / T / L</th><th>Species effect</th><th>95% clustered CI</th><th>Adjusted p</th><th>Evidence</th></tr></thead>
@@ -831,7 +949,7 @@ function AdvancedAnalysis({ dashboard, busy, onExport }: { dashboard: DashboardD
             ))}</tbody>
           </table>
         </div>
-        {!rows.length ? <p>No eligible completed treatment contrasts in this scope.</p> : null}
+        {!rows.length && !requiresReprocessing ? <p>No eligible completed treatment contrasts in this scope. Exports become available after the selected scope has completed, documented paired contrasts.</p> : null}
       </section>
     </section>
   );
@@ -852,36 +970,45 @@ function App() {
   const [speciesResearchResults, setSpeciesResearchResults] = useState<Record<string, SpeciesResearchResult>>({});
   const [speciesResearchErrors, setSpeciesResearchErrors] = useState<Record<string, string>>({});
   const [researchingSpecies, setResearchingSpecies] = useState<string | null>(null);
+  const researchingSpeciesRef = useRef<string | null>(null);
   const [message, setMessage] = useState("Import the PSU workbook to begin.");
+  const closeSettings = useCallback(() => setSettingsOpen(false), []);
   const activeBatchIdRef = useRef<number | null>(emptyDashboard.batch?.id ?? null);
+  const activeResearchScopeRef = useRef(researchScopeIdentity(emptyDashboard));
 
-  async function refreshSpeciesResearchCacheStatus(batchId: number | undefined) {
+  const refreshSpeciesResearchCacheStatus = useCallback(async (batchId: number | undefined, scopeIdentity: string) => {
     if (!window.seedbank || !batchId) return;
     try {
       const status = await window.seedbank.getSpeciesResearchCacheStatus(batchId);
       setDashboard((current) => {
-        if (current.batch?.id !== status.batchId) return current;
+        if (
+          current.batch?.id !== status.batchId ||
+          researchScopeIdentity(current) !== scopeIdentity ||
+          status.scopeHash !== scopeIdentity
+        ) return current;
         return { ...current, speciesResearchCacheStatus: status };
       });
     } catch {
       setDashboard((current) => {
-        if (current.batch?.id !== batchId) return current;
+        if (current.batch?.id !== batchId || researchScopeIdentity(current) !== scopeIdentity) return current;
         return { ...current, speciesResearchCacheStatus: null };
       });
     }
-  }
+  }, []);
 
-  function applyDashboard(next: DashboardData) {
+  const applyDashboard = useCallback((next: DashboardData) => {
     const nextBatchId = next.batch?.id ?? null;
-    if (activeBatchIdRef.current !== nextBatchId) {
+    const nextScopeIdentity = researchScopeIdentity(next);
+    if (activeResearchScopeRef.current !== nextScopeIdentity) {
       setSpeciesResearchResults({});
       setSpeciesResearchErrors({});
       setResearchingSpecies(null);
     }
     activeBatchIdRef.current = nextBatchId;
+    activeResearchScopeRef.current = nextScopeIdentity;
     setDashboard(next);
-    if (next.batch?.id) void refreshSpeciesResearchCacheStatus(next.batch.id);
-  }
+    if (next.batch?.id) void refreshSpeciesResearchCacheStatus(next.batch.id, nextScopeIdentity);
+  }, [refreshSpeciesResearchCacheStatus]);
 
   useEffect(() => {
     let cancelled = false;
@@ -907,11 +1034,7 @@ function App() {
     return () => {
       cancelled = true;
     };
-  }, []);
-
-  useEffect(() => {
-    activeBatchIdRef.current = dashboard.batch?.id ?? null;
-  }, [dashboard.batch?.id]);
+  }, [applyDashboard]);
 
   const bestComparison = dashboard.pairedComparisons[0];
   const donePercent = Math.round(dashboard.metrics.doneRate * 100);
@@ -920,8 +1043,9 @@ function App() {
     : dashboard.batch?.filename ?? "No workbook imported";
   const busy = loading || savingKey;
   const researchCacheStatus = dashboard.speciesResearchCacheStatus;
+  const activeScopeResearchIdentity = researchScopeIdentity(dashboard);
   const activeSessionResearchCount = Object.keys(speciesResearchResults).filter((key) =>
-    dashboard.batch?.id ? key.startsWith(`${dashboard.batch.id}:`) : false
+    key.startsWith(`${activeScopeResearchIdentity}:`)
   ).length;
   const researchedSpeciesCount = researchCacheStatus?.researchedSpecies ?? activeSessionResearchCount;
   const researchSpeciesTotal = researchCacheStatus?.totalSpecies ?? dashboard.metrics.species;
@@ -959,7 +1083,14 @@ function App() {
         detail: "from PCD and notes"
       }
     ],
-    [dashboard, donePercent]
+    [
+      dashboard.metrics.accessions,
+      dashboard.metrics.observationsExtracted,
+      dashboard.metrics.species,
+      dashboard.metrics.treatments,
+      dashboard.metrics.trials,
+      donePercent
+    ]
   );
 
   async function importWorkbook() {
@@ -1005,7 +1136,7 @@ function App() {
     try {
       const preview = await window.seedbank.checkWorkbookUpdate(sourceId);
       setImportPreviews([preview]);
-      setMessage(preview.unchangedSourceId ? "The synced file is unchanged." : "A changed workbook version is ready for review.");
+      setMessage(preview.requiresReprocessing ? "The source is unchanged, but a parser refresh is ready for review." : preview.unchangedSourceId ? "The synced file is unchanged." : "A changed workbook version is ready for review.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to check the workbook.");
     } finally {
@@ -1020,13 +1151,26 @@ function App() {
       const preview = await window.seedbank.relinkWorkbookSource(sourceId);
       if (preview) {
         setImportPreviews([preview]);
-        setDataset(await window.seedbank.getDataset());
-        setMessage("Workbook source relinked. Review the file before importing its content.");
+        setMessage("Replacement file selected. Review it and import to commit the relink.");
       } else {
         setMessage("Relink canceled.");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to relink the workbook source.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function selectPreviewWorksheet(token: string, worksheetName: string) {
+    if (!window.seedbank || busy) return;
+    setLoading(true);
+    try {
+      const preview = await window.seedbank.selectPreviewWorksheet(token, worksheetName);
+      setImportPreviews((current) => current.map((candidate) => (candidate.token === token ? preview : candidate)));
+      setMessage(`Rebuilt the preview using worksheet ${preview.worksheetName}. Review the accepted and quarantined rows before importing.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to select the worksheet.");
     } finally {
       setLoading(false);
     }
@@ -1068,8 +1212,11 @@ function App() {
     if (!window.seedbank || busy) return;
     setLoading(true);
     try {
-      setCodebook(await window.seedbank.saveTreatmentCodebookEntry(entry));
-      setMessage("Treatment codebook version saved. Re-preview a source to rerun eligibility.");
+      const response = await window.seedbank.saveTreatmentCodebookEntry(entry);
+      setCodebook(response.entries);
+      setDataset(response.dataset);
+      applyDashboard(response.dashboard);
+      setMessage("Treatment codebook version saved and eligibility was recalculated for the active scope.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Unable to save the codebook entry.");
     } finally {
@@ -1079,32 +1226,26 @@ function App() {
 
   async function exportAdvancedAnalysis() {
     if (!window.seedbank || busy) return;
+    if (!dashboard.scope) {
+      setMessage("Select an analysis scope before exporting Advanced Analysis files.");
+      setSelectedNav("Imports");
+      return;
+    }
+    if (dashboard.scope.requiresReprocessing) {
+      setMessage("Refresh this imported scope before exporting Advanced Analysis files.");
+      setSelectedNav("Imports");
+      return;
+    }
+    if (!(dashboard.advancedComparisons ?? []).length) {
+      setMessage("No completed, documented paired contrasts are eligible for Advanced Analysis export in this scope.");
+      return;
+    }
     setLoading(true);
     try {
       const result = await window.seedbank.exportAdvancedAnalysis();
       setMessage(result ? `Exported pair, species, and manifest files to ${result.directory}.` : "Export canceled.");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Advanced analysis export failed.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function importLocalDefault() {
-    if (!window.seedbank || busy) return;
-    setLoading(true);
-    setMessage("Looking for P_accessions_new.xlsx in the repo...");
-    try {
-      const next = await window.seedbank.importLocalDefaultWorkbook();
-      if (next) {
-        applyDashboard(next);
-        setAiConfigured(next.aiInsightStatus.configured);
-        setMessage(`Imported ${next.batch?.filename ?? "local workbook"}. ${next.aiInsightStatus.message}`);
-      } else {
-        setMessage("No local default workbook found.");
-      }
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : "Local import failed.");
     } finally {
       setLoading(false);
     }
@@ -1149,9 +1290,11 @@ function App() {
   const researchSpecies = useCallback(
     async (species: string, force = false) => {
       const requestedBatchId = activeBatchIdRef.current;
-      if (!window.seedbank || requestedBatchId === null || researchingSpecies === species) return;
-      const key = researchKey(requestedBatchId, species);
-      setResearchingSpecies(species);
+      const requestedScopeIdentity = activeResearchScopeRef.current;
+      const key = researchKey(requestedScopeIdentity, species);
+      if (!window.seedbank || requestedBatchId === null || researchingSpeciesRef.current === key) return;
+      researchingSpeciesRef.current = key;
+      setResearchingSpecies(key);
       setSpeciesResearchErrors((current) => {
         const next = { ...current };
         delete next[key];
@@ -1164,12 +1307,12 @@ function App() {
       );
       try {
         const result = await window.seedbank.researchSpecies(requestedBatchId, species, force);
-        if (activeBatchIdRef.current !== requestedBatchId) {
-          setMessage("Species research completed for a prior workbook, but a newer import is active.");
+        if (activeBatchIdRef.current !== requestedBatchId || activeResearchScopeRef.current !== requestedScopeIdentity) {
+          setMessage("Species research completed for a prior analysis scope, but a newer scope is active.");
           return;
         }
         setSpeciesResearchResults((current) => ({ ...current, [key]: result }));
-        void refreshSpeciesResearchCacheStatus(requestedBatchId);
+        void refreshSpeciesResearchCacheStatus(requestedBatchId, requestedScopeIdentity);
         setMessage(
           result.status === "no_sources"
             ? `No valid AI technique survived for ${species}; local evidence remains available as an audit trail.`
@@ -1180,16 +1323,23 @@ function App() {
         setSpeciesResearchErrors((current) => ({ ...current, [key]: detail }));
         setMessage(detail);
       } finally {
-        setResearchingSpecies((current) => (current === species ? null : current));
+        setResearchingSpecies((current) => {
+          if (current === key) {
+            researchingSpeciesRef.current = null;
+            return null;
+          }
+          return current;
+        });
       }
     },
-    [researchingSpecies]
+    [refreshSpeciesResearchCacheStatus]
   );
 
   async function clearOpenAiKey() {
     if (!window.seedbank || busy) return;
     const requestedBatchId = dashboard.batch?.id ?? null;
     setSavingKey(true);
+    researchingSpeciesRef.current = null;
     setResearchingSpecies(null);
     try {
       const status = await window.seedbank.clearOpenAiKey(requestedBatchId ?? undefined);
@@ -1354,6 +1504,7 @@ function App() {
             onCommit={commitImportPreviews}
             onCheckUpdate={checkWorkbookUpdate}
             onRelink={relinkWorkbookSource}
+            onSelectWorksheet={selectPreviewWorksheet}
             onSelectScope={selectAnalysisScope}
             onCreateCombinedScope={createCombinedScope}
             onSaveCodebook={saveCodebookEntry}
@@ -1388,7 +1539,12 @@ function App() {
         )}
 
         {selectedNav === "Advanced Analysis" && (
-          <AdvancedAnalysis dashboard={dashboard} busy={busy} onExport={exportAdvancedAnalysis} />
+          <AdvancedAnalysis
+            dashboard={dashboard}
+            busy={busy}
+            onExport={exportAdvancedAnalysis}
+            onOpenImports={() => setSelectedNav("Imports")}
+          />
         )}
 
         {selectedNav === "Trial Queue" && (
@@ -1418,7 +1574,7 @@ function App() {
         safeStorageAvailable={safeStorageAvailable}
         aiConfigured={aiConfigured}
         saving={busy}
-        onClose={() => setSettingsOpen(false)}
+        onClose={closeSettings}
         onInput={setApiKeyInput}
         onSave={saveOpenAiKey}
         onClear={clearOpenAiKey}

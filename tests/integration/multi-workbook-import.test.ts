@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import ExcelJS from "exceljs";
@@ -71,5 +71,101 @@ describe("multi-workbook ingestion", () => {
     expect(result.issues).toEqual(expect.arrayContaining([
       expect.objectContaining({ id: "ambiguous-duplicate-rows", sourceRows: [2, 3] })
     ]));
+  });
+
+  it("does not use differing outcome values to classify duplicates as independent replicates", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "seedbank-outcome-duplicates-"));
+    cleanup.push(directory);
+    const file = path.join(directory, "duplicates-with-outcomes.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Accessions");
+    sheet.addRow(["P_Accession", "Source_Accession", "Species", "Trt", "Num", "Start", "PT", "TTD", "PC"]);
+    sheet.addRow(["P1", "S1", "Species one", "CS", 50, "2024-01-01", "s", "2024-04-01", 1]);
+    sheet.addRow(["P1", "S1", "Species one", "CS", 50, "2024-01-01", "s", "2024-05-01", 5]);
+    await workbook.xlsx.writeFile(file);
+
+    const result = await importWorkbook(file);
+    expect(result.trials.every((trial) => trial.replicateClassification === "ambiguous_duplicate")).toBe(true);
+  });
+
+  it("only marks the repeated design fingerprint ambiguous within a larger replicate group", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "seedbank-partial-duplicates-"));
+    cleanup.push(directory);
+    const file = path.join(directory, "partial-duplicates.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Accessions");
+    sheet.addRow(["P_Accession", "Source_Accession", "Species", "Trt", "Num", "Start", "PT", "TTD", "PC"]);
+    sheet.addRow(["P1", "S1", "Species one", "CS", 50, "2024-01-01", "s", "2024-04-01", 1]);
+    sheet.addRow(["P1", "S1", "Species one", "CS", 50, "2024-01-01", "s", "2024-05-01", 5]);
+    sheet.addRow(["P1", "S1", "Species one", "CS", 50, "2024-02-01", "s", "2024-06-01", 4]);
+    await workbook.xlsx.writeFile(file);
+
+    const result = await importWorkbook(file);
+    expect(result.trials.map((trial) => trial.replicateClassification)).toEqual([
+      "ambiguous_duplicate",
+      "ambiguous_duplicate",
+      "genuine_replicate"
+    ]);
+  });
+
+  it("retains a zero score when another row establishes a percentage scale", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "seedbank-zero-score-"));
+    cleanup.push(directory);
+    const file = path.join(directory, "mixed-score-scale.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Accessions");
+    sheet.addRow(["P_Accession", "Source_Accession", "Species", "Trt", "Num", "Start", "PT", "TTD", "PC"]);
+    sheet.addRow(["P1", "S1", "Species one", "C", 50, "2024-01-01", "s", "2024-04-01", 0]);
+    sheet.addRow(["P2", "S2", "Species two", "C", 50, "2024-01-01", "s", "2024-04-01", 50]);
+    await workbook.xlsx.writeFile(file);
+
+    const result = await importWorkbook(file);
+    expect(result.trials[0]).toMatchObject({ pc: 0, pcRaw: 0, pcScale: "ordinal_0_5" });
+    expect(result.trials[0].validationWarnings).not.toContain("Ambiguous PC score scale");
+  });
+
+  it("rejects an archive whose declared expanded content exceeds the import bound before ExcelJS loads it", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "seedbank-archive-limit-"));
+    cleanup.push(directory);
+    const file = path.join(directory, "oversized.xlsx");
+    const filename = Buffer.from("xl/worksheets/sheet1.xml");
+    const central = Buffer.alloc(46 + filename.length);
+    central.writeUInt32LE(0x02014b50, 0);
+    central.writeUInt16LE(20, 4);
+    central.writeUInt16LE(20, 6);
+    central.writeUInt32LE(1, 20);
+    central.writeUInt32LE(100 * 1024 * 1024 + 1, 24);
+    central.writeUInt16LE(filename.length, 28);
+    filename.copy(central, 46);
+    const end = Buffer.alloc(22);
+    end.writeUInt32LE(0x06054b50, 0);
+    end.writeUInt16LE(1, 8);
+    end.writeUInt16LE(1, 10);
+    end.writeUInt32LE(central.length, 12);
+    await writeFile(file, Buffer.concat([central, end]));
+
+    await expect(importWorkbook(file)).rejects.toThrow("Workbook archive contains an entry that exceeds the 50 MB expanded import limit.");
+  });
+
+  it("quarantines rows with only non-identity evidence and preserves uncached formulas", async () => {
+    const directory = await mkdtemp(path.join(os.tmpdir(), "seedbank-formula-evidence-"));
+    cleanup.push(directory);
+    const file = path.join(directory, "formula-evidence.xlsx");
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet("Accessions");
+    sheet.addRow(["P_Accession", "Source_Accession", "Species", "Trt", "Num", "Start", "PT", "TTD", "PC", "NOTES"]);
+    sheet.addRow(["P1", "S1", "Species one", "C", 50, "2024-01-01", "s", "2024-04-01", null, "formula follows"]);
+    sheet.getCell("I2").value = { formula: "1+2" } as never;
+    sheet.addRow([null, null, null, null, null, null, null, null, null, "Source note requiring correction"]);
+    await workbook.xlsx.writeFile(file);
+
+    const result = await importWorkbook(file);
+    expect(result.batch.populatedRowCount).toBe(2);
+    expect(result.trials[0].rawCellValues?.pc).toBe("=1+2");
+    expect(result.trials[0].pc).toBeNull();
+    expect(result.quarantinedRows?.[0]).toMatchObject({
+      reasons: expect.arrayContaining(["Missing propagation accession", "Missing species", "Missing treatment"]),
+      rawCellValues: expect.objectContaining({ notes: "Source note requiring correction" })
+    });
   });
 });

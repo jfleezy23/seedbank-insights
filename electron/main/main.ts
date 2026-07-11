@@ -9,8 +9,15 @@ import {
   suggestHeaderAliases
 } from "./openai-insights";
 import { researchSpeciesWithExternalSources, summarizeSpeciesResearchCacheStatus } from "./species-research";
-import { importWorkbook, inspectWorkbookCandidates, inspectWorkbookHeaders } from "../../src/core/workbook";
+import {
+  importPreparedWorkbook,
+  inspectPreparedWorkbookCandidates,
+  inspectPreparedWorkbookHeaders,
+  prepareWorkbook,
+  type PreparedWorkbook
+} from "../../src/core/workbook";
 import { buildAdvancedAnalysisRows, buildAdvancedComparisons } from "../../src/core/statistics";
+import { csvFromRows } from "../../src/core/csv";
 import type {
   AiInsightStatus,
   DashboardData,
@@ -28,9 +35,10 @@ let splashWindow: BrowserWindow | null = null;
 let database: SeedBankDatabase | null = null;
 const speciesResearchCache = new Map<string, unknown>();
 const speciesResearchInFlight = new Map<string, Promise<SpeciesResearchResult>>();
-const pendingImports = new Map<string, ImportResult>();
+const pendingImports = new Map<string, { result: ImportResult; createdAt: number }>();
+const MAX_PENDING_IMPORTS = 20;
+const PENDING_IMPORT_TTL_MS = 30 * 60 * 1000;
 const SPECIES_RESEARCH_CACHE_VERSION = "species-research-v6";
-const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const configuredSplashMs = Number.parseInt(process.env.SEEDBANK_SPLASH_MIN_MS ?? "1100", 10);
 const MIN_SPLASH_MS = Number.isFinite(configuredSplashMs) ? Math.max(0, configuredSplashMs) : 1100;
 let splashShownAt = 0;
@@ -72,20 +80,26 @@ function openAiFailureMessage(action: string): string {
   return `OpenAI ${action} failed. Check Settings, network access, and the API key, then try again.`;
 }
 
-function uniquePaths(paths: string[]): string[] {
-  return [...new Set(paths.map((candidate) => path.resolve(candidate)))];
+async function confirmOpenAiDataTransfer(action: string): Promise<void> {
+  const options = {
+    type: "warning" as const,
+    title: "Send local workbook evidence to OpenAI?",
+    message: `Continue with ${action}?`,
+    detail:
+      "This sends a bounded, source-cited summary from the active analysis scope to OpenAI. The API key stays on this device. Cancel keeps all workbook data local.",
+    buttons: ["Cancel", "Continue"],
+    defaultId: 0,
+    cancelId: 0,
+    noLink: true
+  };
+  const result = mainWindow && !mainWindow.isDestroyed()
+    ? await dialog.showMessageBox(mainWindow, options)
+    : await dialog.showMessageBox(options);
+  if (result.response !== 1) throw new Error("OpenAI request canceled; workbook data remains local.");
 }
 
-function defaultWorkbookCandidates(): string[] {
-  const roots = [process.cwd(), appRootPath()];
-  if (app.isPackaged) {
-    roots.push(path.resolve(process.resourcesPath, "../../../../.."));
-    roots.push(path.resolve(path.dirname(process.execPath), "../../../../.."));
-  }
-  return uniquePaths(roots).flatMap((root) => [
-    path.join(root, "P_accessions_new.xlsx"),
-    path.join(root, "data/raw/P_accessions_new.xlsx")
-  ]);
+function uniquePaths(paths: string[]): string[] {
+  return [...new Set(paths.map((candidate) => path.resolve(candidate)))];
 }
 
 function aiResponseCacheDir(): string {
@@ -101,29 +115,23 @@ function speciesCacheSlug(species: string): string {
     .slice(0, 80);
 }
 
-function speciesResearchCacheKey(batch: ImportBatchSummary, species: string): string {
-  const dataset = getDatabase().getDatasetState();
-  const activeScope = dataset.scopes.find((scope) => scope.id === dataset.activeScopeId);
-  const identity = activeScope && batch.id && activeScope.batchIds.includes(batch.id)
-    ? activeScope.scopeHash
-    : batch.workbookHash;
+function speciesResearchCacheKey(identity: string, species: string): string {
   return `${identity.slice(0, 16)}-${speciesCacheSlug(species)}`;
 }
 
-function speciesResearchCachePath(batch: ImportBatchSummary, species: string): string {
-  return path.join(aiResponseCacheDir(), `${speciesResearchCacheKey(batch, species)}.json`);
+function speciesResearchCachePath(identity: string, species: string): string {
+  return path.join(aiResponseCacheDir(), `${speciesResearchCacheKey(identity, species)}.json`);
 }
 
-function speciesResearchCacheCandidatePaths(batch: ImportBatchSummary, species: string): string[] {
-  const filename = `${speciesResearchCacheKey(batch, species)}.json`;
-  return uniquePaths([speciesResearchCachePath(batch, species)]);
+function speciesResearchCacheCandidatePaths(identity: string, species: string): string[] {
+  return uniquePaths([speciesResearchCachePath(identity, species)]);
 }
 
 async function readSpeciesResearchCache(
-  batch: ImportBatchSummary,
+  identity: string,
   species: string
 ): Promise<SpeciesResearchResult | null> {
-  for (const candidatePath of speciesResearchCacheCandidatePaths(batch, species)) {
+  for (const candidatePath of speciesResearchCacheCandidatePaths(identity, species)) {
     try {
       const parsed = JSON.parse(await fs.promises.readFile(candidatePath, "utf8")) as {
         version?: string;
@@ -151,6 +159,7 @@ async function getSpeciesResearchCacheStatus(batchId?: number): Promise<SpeciesR
   if (!batch?.id) {
     return {
       batchId: null,
+      scopeHash: null,
       cacheVersion: SPECIES_RESEARCH_CACHE_VERSION,
       totalSpecies: 0,
       researchedSpecies: 0,
@@ -159,31 +168,32 @@ async function getSpeciesResearchCacheStatus(batchId?: number): Promise<SpeciesR
     };
   }
 
+  const scope = dashboard.scope;
+  const identity = scope?.scopeHash ?? batch.workbookHash;
   const scopedTrials = active ? database.getTrialsForScope(active) : database.getImportResult(batch.id)?.trials ?? [];
   return summarizeSpeciesResearchCacheStatus({
     batch,
     species: scopedTrials.map((trial) => trial.species),
     cacheVersion: SPECIES_RESEARCH_CACHE_VERSION,
-    readCache: readSpeciesResearchCache
-  });
+    readCache: (_batch, species) => readSpeciesResearchCache(identity, species)
+  }).then((status) => ({ ...status, scopeHash: identity }));
 }
 
 async function writeSpeciesResearchCache(
   batch: ImportBatchSummary,
   species: string,
-  result: SpeciesResearchResult
+  result: SpeciesResearchResult,
+  identity: string
 ): Promise<void> {
   await fs.promises.mkdir(aiResponseCacheDir(), { recursive: true });
   await fs.promises.writeFile(
-    speciesResearchCachePath(batch, species),
+    speciesResearchCachePath(identity, species),
     JSON.stringify(
       {
         version: SPECIES_RESEARCH_CACHE_VERSION,
         cachedAt: new Date().toISOString(),
         workbookHash: batch.workbookHash,
-        analysisScopeHash:
-          getDatabase().getDatasetState().scopes.find((scope) => scope.id === getDatabase().getDatasetState().activeScopeId)
-            ?.scopeHash ?? batch.workbookHash,
+        analysisScopeHash: identity,
         batchFilename: batch.filename,
         species,
         result
@@ -467,12 +477,6 @@ function withOpenAiStatus(dashboard: DashboardData, override?: Partial<AiInsight
   return { ...dashboard, speciesInsights: [], aiInsightStatus: { ...base, ...override, configured } };
 }
 
-async function saveImportWithAiStatus(result: ImportResult): Promise<DashboardData> {
-  speciesResearchCache.clear();
-  const saved = getDatabase().saveImport(result);
-  return withOpenAiStatus(saved);
-}
-
 async function generateSpeciesInsightsForBatch({
   batchId,
   force = false
@@ -513,30 +517,79 @@ async function generateSpeciesInsightsForBatch({
   });
 }
 
-async function importWorkbookWithOptionalAiPrep(filePath: string): Promise<ImportResult> {
+async function importWorkbookWithOptionalAiPrep(prepared: PreparedWorkbook, sourceId?: number): Promise<ImportResult> {
   const codebook = getDatabase().getTreatmentCodebook();
-  const baseOptions = { codebook, sourcePath: path.resolve(filePath) };
+  const baseOptions = { codebook, sourcePath: path.resolve(prepared.filePath), sourceId };
   const apiKey = loadOpenAiKey();
-  if (!apiKey) return importWorkbook(filePath, baseOptions);
-  const profile = await inspectWorkbookHeaders(filePath);
-  if (!profile.missingHeaders.length) return importWorkbook(filePath, baseOptions);
+  if (!apiKey) return importPreparedWorkbook(prepared, baseOptions);
+  const profile = inspectPreparedWorkbookHeaders(prepared);
+  if (!profile.missingHeaders.length) return importPreparedWorkbook(prepared, baseOptions);
   try {
     const headerAliases = await suggestHeaderAliases({ apiKey, profile });
-    return importWorkbook(filePath, { ...baseOptions, headerAliases });
+    return importPreparedWorkbook(prepared, { ...baseOptions, headerAliases });
   } catch (error) {
     console.warn(`OpenAI header mapping failed; falling back to deterministic import: ${sanitizeErrorMessage(error)}`);
-    return importWorkbook(filePath, baseOptions);
+    return importPreparedWorkbook(prepared, baseOptions);
   }
 }
 
-async function previewWorkbook(filePath: string): Promise<ImportPreview> {
-  assertWorkbookPath(filePath);
-  const [result, candidates] = await Promise.all([
-    importWorkbookWithOptionalAiPrep(filePath),
-    inspectWorkbookCandidates(filePath)
-  ]);
+function clearExpiredPreviews(): void {
+  const cutoff = Date.now() - PENDING_IMPORT_TTL_MS;
+  for (const [token, pending] of pendingImports) {
+    if (pending.createdAt < cutoff) pendingImports.delete(token);
+  }
+}
+
+function ensurePreviewCapacity(additionalPreviews = 1): void {
+  clearExpiredPreviews();
+  if (pendingImports.size + additionalPreviews > MAX_PENDING_IMPORTS) {
+    throw new Error(`Review or cancel existing previews before adding more than ${MAX_PENDING_IMPORTS} workbooks.`);
+  }
+}
+
+async function sourceIsReadable(canonicalPath: string): Promise<boolean> {
+  if (canonicalPath.startsWith("legacy://")) return false;
+  let timeout: NodeJS.Timeout | null = null;
+  try {
+    return await Promise.race([
+      fs.promises.stat(canonicalPath).then((entry) => entry.isFile(), () => false),
+      new Promise<boolean>((resolve) => {
+        timeout = setTimeout(() => resolve(false), 1_500);
+      })
+    ]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+}
+
+async function getDatasetStateWithAvailability(): Promise<DatasetState> {
+  const state = getDatabase().getDatasetState();
+  const available = await Promise.all(state.sources.map((source) => sourceIsReadable(source.canonicalPath)));
+  return {
+    ...state,
+    sources: state.sources.map((source, index) => ({ ...source, available: available[index] }))
+  };
+}
+
+async function assertSourceReadable(canonicalPath: string): Promise<void> {
+  if (!(await sourceIsReadable(canonicalPath))) {
+    throw new Error("The synced workbook is unavailable or cloud-only. Relink it after making the file available offline.");
+  }
+}
+
+async function previewWorkbook(
+  filePath: string,
+  sourceId?: number,
+  worksheetName?: string,
+  capacityReserved = false
+): Promise<ImportPreview> {
+  if (!capacityReserved) ensurePreviewCapacity();
+  const prepared = await prepareWorkbook(filePath, worksheetName);
+  const result = await importWorkbookWithOptionalAiPrep(prepared, sourceId);
+  const candidates = inspectPreparedWorkbookCandidates(prepared);
   const token = randomUUID();
-  pendingImports.set(token, result);
+  pendingImports.set(token, { result, createdAt: Date.now() });
+  const existingFormatVersion = getDatabase().getImportFormatVersionByHash(result.batch.workbookHash);
   return {
     token,
     sourcePath: path.resolve(filePath),
@@ -546,58 +599,38 @@ async function previewWorkbook(filePath: string): Promise<ImportPreview> {
     worksheetName: result.batch.worksheetName ?? candidates[0]?.worksheetName ?? "",
     populatedRows: result.batch.populatedRowCount ?? result.batch.rowCount,
     acceptedRows: result.batch.rowCount,
-    quarantinedRows: result.quarantinedRows ?? [],
+    quarantinedRows: (result.quarantinedRows ?? []).map(({ rawCellValues: _rawCellValues, ...row }) => row),
     issues: result.issues,
     duplicateCandidates: result.trials
       .filter((trial) => trial.replicateClassification === "ambiguous_duplicate")
       .map((trial) => trial.sourceRow),
+    requiresReprocessing:
+      existingFormatVersion !== null && existingFormatVersion < (result.batch.importFormatVersion ?? 1),
     unchangedSourceId:
       getDatabase().getDatasetState().sources.find((source) => source.latestWorkbookHash === result.batch.workbookHash)?.id ?? null
   };
 }
 
-function assertWorkbookPath(filePath: string): void {
-  const extension = path.extname(filePath).toLowerCase();
-  if (![".xlsx", ".xls"].includes(extension)) {
-    throw new Error("Only .xlsx and .xls workbook imports are supported.");
-  }
-  const stat = fs.statSync(filePath);
-  if (!stat.isFile()) throw new Error("Selected workbook path is not a file.");
-  if (stat.size > MAX_WORKBOOK_BYTES) {
-    throw new Error("Workbook is larger than the 25 MB prototype import limit.");
-  }
-}
-
-function csvValue(value: unknown): string {
-  const text = value === null || value === undefined ? "" : String(value);
-  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
-}
-
-function csvFromRows(rows: Array<Record<string, unknown>>): string {
-  if (!rows.length) return "";
-  const headers = Object.keys(rows[0]);
-  return [headers.join(","), ...rows.map((row) => headers.map((header) => csvValue(row[header])).join(","))].join("\r\n");
-}
-
 ipcMain.handle("dashboard:get", () => withOpenAiStatus(getDatabase().getActiveDashboard()));
 
-ipcMain.handle("dataset:get", (): DatasetState => getDatabase().getDatasetState());
+ipcMain.handle("dataset:get", () => getDatasetStateWithAvailability());
 
 ipcMain.handle("dataset:previewSelect", async () => {
   const result = await dialog.showOpenDialog({
     properties: ["openFile", "multiSelections"],
-    filters: [{ name: "Spreadsheets", extensions: ["xlsx", "xls"] }]
+    filters: [{ name: "Excel workbooks", extensions: ["xlsx"] }]
   });
   if (result.canceled) return [];
-  return Promise.all(result.filePaths.map(previewWorkbook));
+  ensurePreviewCapacity(result.filePaths.length);
+  return Promise.all(result.filePaths.map((filePath) => previewWorkbook(filePath, undefined, undefined, true)));
 });
 
 ipcMain.handle("dataset:checkUpdate", async (_event, sourceId: unknown) => {
   const id = Number(sourceId);
   const source = getDatabase().getDatasetState().sources.find((candidate) => candidate.id === id);
   if (!source) throw new Error("Workbook source was not found.");
-  if (!fs.existsSync(source.canonicalPath)) throw new Error("The synced workbook is unavailable or cloud-only. Relink it before importing.");
-  return previewWorkbook(source.canonicalPath);
+  await assertSourceReadable(source.canonicalPath);
+  return previewWorkbook(source.canonicalPath, source.id);
 });
 
 ipcMain.handle("dataset:relink", async (_event, sourceId: unknown) => {
@@ -606,49 +639,81 @@ ipcMain.handle("dataset:relink", async (_event, sourceId: unknown) => {
   if (!source) throw new Error("Workbook source was not found.");
   const selected = await dialog.showOpenDialog({
     properties: ["openFile"],
-    filters: [{ name: "Spreadsheets", extensions: ["xlsx", "xls"] }]
+    filters: [{ name: "Excel workbooks", extensions: ["xlsx"] }]
   });
   if (selected.canceled || !selected.filePaths[0]) return null;
-  assertWorkbookPath(selected.filePaths[0]);
   const resolved = path.resolve(selected.filePaths[0]);
-  getDatabase().relinkSource(id, resolved, path.basename(resolved));
-  return previewWorkbook(resolved);
+  const collision = getDatabase()
+    .getDatasetState()
+    .sources.find((candidate) => candidate.id !== id && candidate.canonicalPath === resolved);
+  if (collision) throw new Error("That file is already registered as another workbook source.");
+  // Relinking is only committed with the reviewed immutable import. Cancelling
+  // or rejecting this preview leaves the registered source untouched.
+  return previewWorkbook(resolved, id);
+});
+
+ipcMain.handle("dataset:selectWorksheet", async (_event, token: unknown, worksheetName: unknown) => {
+  clearExpiredPreviews();
+  const key = String(token ?? "");
+  const pending = pendingImports.get(key);
+  if (!pending) throw new Error("The import preview expired. Preview the workbook again.");
+  const selectedWorksheet = String(worksheetName ?? "").trim();
+  if (!selectedWorksheet) throw new Error("Select a compatible worksheet before importing.");
+  pendingImports.delete(key);
+  try {
+    return await previewWorkbook(
+      pending.result.batch.sourcePath ?? pending.result.batch.filename,
+      pending.result.batch.sourceId,
+      selectedWorksheet
+    );
+  } catch (error) {
+    pendingImports.set(key, pending);
+    throw error;
+  }
 });
 
 ipcMain.handle("dataset:commitPreviews", async (_event, tokens: unknown) => {
   if (!Array.isArray(tokens) || !tokens.length) throw new Error("No import previews were selected.");
-  for (const rawToken of tokens) {
-    const token = String(rawToken);
-    const result = pendingImports.get(token);
-    if (!result) throw new Error("An import preview expired. Preview the workbook again.");
-    getDatabase().saveImport(result);
-    pendingImports.delete(token);
-  }
+  clearExpiredPreviews();
+  const selectedTokens = [...new Set(tokens.map(String))];
+  const results = selectedTokens.map((token) => {
+    const pending = pendingImports.get(token);
+    if (!pending) throw new Error("An import preview expired. Preview the workbook again.");
+    return pending.result;
+  });
+  getDatabase().saveImports(results);
+  selectedTokens.forEach((token) => pendingImports.delete(token));
   speciesResearchCache.clear();
   return {
-    dataset: getDatabase().getDatasetState(),
+    dataset: await getDatasetStateWithAvailability(),
     dashboard: withOpenAiStatus(getDatabase().getActiveDashboard())
   };
 });
 
-ipcMain.handle("dataset:createScope", (_event, name: unknown, batchIds: unknown) => {
+ipcMain.handle("dataset:createScope", async (_event, name: unknown, batchIds: unknown) => {
   if (!Array.isArray(batchIds)) throw new Error("Select workbook versions for the scope.");
-  const scope = getDatabase().createScope(String(name ?? "Combined analysis"), batchIds.map(Number));
+  const database = getDatabase();
+  const scope = database.createScope(String(name ?? "Combined analysis"), batchIds.map(Number));
+  const dashboard = database.setActiveScope(scope.id);
   return {
-    dataset: getDatabase().getDatasetState(),
-    dashboard: withOpenAiStatus(getDatabase().setActiveScope(scope.id))
+    dataset: await getDatasetStateWithAvailability(),
+    dashboard: withOpenAiStatus(dashboard)
   };
 });
 
-ipcMain.handle("dataset:setScope", (_event, scopeId: unknown) => ({
-  dataset: getDatabase().getDatasetState(),
-  dashboard: withOpenAiStatus(getDatabase().setActiveScope(Number(scopeId)))
-}));
+ipcMain.handle("dataset:setScope", async (_event, scopeId: unknown) => {
+  const database = getDatabase();
+  const dashboard = database.setActiveScope(Number(scopeId));
+  return { dataset: await getDatasetStateWithAvailability(), dashboard: withOpenAiStatus(dashboard) };
+});
 
 ipcMain.handle("codebook:get", (): TreatmentCodebookEntry[] => getDatabase().getTreatmentCodebook());
-ipcMain.handle("codebook:save", (_event, entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">) =>
-  getDatabase().saveTreatmentCodebookEntry(entry)
-);
+ipcMain.handle("codebook:save", async (_event, entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">) => {
+  const database = getDatabase();
+  const entries = database.saveTreatmentCodebookEntry(entry);
+  speciesResearchCache.clear();
+  return { entries, dataset: await getDatasetStateWithAvailability(), dashboard: withOpenAiStatus(database.getActiveDashboard()) };
+});
 
 ipcMain.handle("analysis:export", async () => {
   const database = getDatabase();
@@ -670,8 +735,11 @@ ipcMain.handle("analysis:export", async () => {
     generatedAt: new Date().toISOString(),
     scope,
     selectedWorkbookHashes: scope.workbookHashes.slice().sort(),
+    selectedImportVersions: scope.importVersions.slice().sort((left, right) => left.batchId - right.batchId),
     filters: { status: "D", endpoint: "PC", undocumentedTreatments: "descriptive_only" },
-    codebookVersion: database.getTreatmentCodebookVersion(),
+    codebookVersion: scope.codebookVersion,
+    codebookHash: scope.codebookHash,
+    treatmentCodebook: database.getTreatmentCodebook(),
     estimands: ["median ordinal pair shift", "species-balanced mean shift", "non-tie win rate"],
     randomSeeds: { speciesClusterBootstrap: 1729, iterations: 2000 },
     tests: { speciesLevel: "two-sided exact sign test", ties: "excluded" },
@@ -690,32 +758,12 @@ ipcMain.handle("openai:speciesResearchCacheStatus", async (_event, batchId?: num
   getSpeciesResearchCacheStatus(optionalBatchId(batchId))
 );
 
-ipcMain.handle("workbook:select", async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ["openFile"],
-    filters: [{ name: "Spreadsheets", extensions: ["xlsx", "xls"] }]
-  });
-  if (result.canceled || !result.filePaths[0]) return null;
-  assertWorkbookPath(result.filePaths[0]);
-  const imported = await importWorkbookWithOptionalAiPrep(result.filePaths[0]);
-  return saveImportWithAiStatus(imported);
-});
-
-ipcMain.handle("workbook:importLocalDefault", async () => {
-  const candidates = defaultWorkbookCandidates();
-  const found = candidates.find((candidate) => fs.existsSync(candidate));
-  if (!found) return null;
-  assertWorkbookPath(found);
-  const imported = await importWorkbookWithOptionalAiPrep(found);
-  return saveImportWithAiStatus(imported);
-});
-
 ipcMain.handle("openai:status", () => ({
   configured: openAiConfigured(),
   safeStorageAvailable: safeStorage.isEncryptionAvailable()
 }));
 
-ipcMain.handle("openai:saveKey", async (_event, key: string, batchId?: number) => {
+ipcMain.handle("openai:saveKey", async (_event, key: string, _batchId?: number) => {
   if (!safeStorage.isEncryptionAvailable()) {
     throw new Error("OS safe storage is unavailable on this machine.");
   }
@@ -725,7 +773,7 @@ ipcMain.handle("openai:saveKey", async (_event, key: string, batchId?: number) =
   }
   const encrypted = safeStorage.encryptString(normalizedKey);
   await fs.promises.writeFile(keyPath(), encrypted);
-  const dashboard = getDatabase().getDashboard(optionalBatchId(batchId));
+  const dashboard = getDatabase().getActiveDashboard();
   return {
     configured: true,
     safeStorageAvailable: true,
@@ -733,7 +781,7 @@ ipcMain.handle("openai:saveKey", async (_event, key: string, batchId?: number) =
   };
 });
 
-ipcMain.handle("openai:clearKey", async (_event, batchId?: number) => {
+ipcMain.handle("openai:clearKey", async (_event, _batchId?: number) => {
   try {
     await fs.promises.unlink(keyPath());
   } catch (error) {
@@ -742,7 +790,7 @@ ipcMain.handle("openai:clearKey", async (_event, batchId?: number) => {
   return {
     configured: false,
     safeStorageAvailable: safeStorage.isEncryptionAvailable(),
-    dashboard: withOpenAiStatus(getDatabase().getDashboard(optionalBatchId(batchId)))
+    dashboard: withOpenAiStatus(getDatabase().getActiveDashboard())
   };
 });
 
@@ -767,11 +815,12 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
   const localSpecies = speciesInImport(importResult, requestedSpecies);
   if (!localSpecies) throw new Error("Select a species from the imported workbook before running research.");
   const batch = importResult.batch;
+  const cacheIdentity = activeScope?.scopeHash ?? batch.workbookHash;
 
-  const cacheKey = speciesResearchCacheKey(batch, localSpecies);
+  const cacheKey = speciesResearchCacheKey(cacheIdentity, localSpecies);
   if (!force && speciesResearchCache.has(cacheKey)) return speciesResearchCache.get(cacheKey);
   if (!force) {
-    const cached = await readSpeciesResearchCache(batch, localSpecies);
+    const cached = await readSpeciesResearchCache(cacheIdentity, localSpecies);
     if (cached) {
       speciesResearchCache.set(cacheKey, cached);
       return cached;
@@ -786,6 +835,7 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
   const dashboard = withOpenAiStatus(activeScope ? getDatabase().getDashboardForScope(activeScope.id) : getDatabase().getDashboard(activeBatchId));
   const existing = speciesResearchInFlight.get(cacheKey);
   if (existing) return existing;
+  await confirmOpenAiDataTransfer(`source-backed research for ${localSpecies}`);
 
   try {
     const pending = researchSpeciesWithExternalSources({
@@ -798,7 +848,7 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
     const result = await pending;
     if (result.status === "ready") {
       speciesResearchCache.set(cacheKey, result);
-      await writeSpeciesResearchCache(batch, localSpecies, result).catch((error: unknown) => {
+      await writeSpeciesResearchCache(batch, localSpecies, result, cacheIdentity).catch((error: unknown) => {
         console.warn(`Unable to write species research cache: ${sanitizeErrorMessage(error)}`);
       });
     }
@@ -817,11 +867,12 @@ ipcMain.handle("openai:ask", async (_event, question: string) => {
   if (trimmed.length > 700) throw new Error("Questions are limited to 700 characters for the demo.");
   const apiKey = loadOpenAiKey();
   if (!apiKey) throw new Error("OpenAI is not configured. Add an API key in Settings.");
+  await confirmOpenAiDataTransfer("an Ask question about the active analysis scope");
   try {
     return await answerSpreadsheetQuestion({
       apiKey,
       question: trimmed,
-      context: getDatabase().getAskContext()
+      context: getDatabase().getAskContextForScope()
     });
   } catch (error) {
     console.warn(`OpenAI Ask failed: ${sanitizeErrorMessage(error)}`);

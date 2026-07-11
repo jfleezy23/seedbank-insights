@@ -73,6 +73,17 @@ describe("advanced statistics", () => {
     expect(comparison.confidence).toBe("Needs replication");
   });
 
+  it("includes the exact sign-test tail boundary", () => {
+    const trials = Array.from({ length: 10 }, (_, index) => [
+      row(`P${index}`, `Species ${index}`, "C", 2),
+      row(`P${index}`, `Species ${index}`, "CS", index === 0 ? 3 : 1)
+    ]).flat();
+
+    const comparison = buildAdvancedComparisons(trials)[0];
+
+    expect(comparison.rawPValue).toBeCloseTo(0.021484375, 10);
+  });
+
   it("requires repeated cohorts for a strong signal and exports median replicate pairs", () => {
     const trials = Array.from({ length: 30 }, (_, index) => {
       const cohort = index < 15 ? "2023" : "2024";
@@ -89,5 +100,44 @@ describe("advanced statistics", () => {
     expect(exported.pairRows).toHaveLength(30);
     expect(exported.pairRows[0]).toMatchObject({ baselineScore: 2, treatmentScore: 4, diff: 2 });
     expect(exported.speciesRows).toHaveLength(30);
+  });
+
+  it("never pairs an accession across different immutable workbook cohorts", () => {
+    const firstCohort = row("P1", "Species one", "C", 1);
+    const secondCohort = row("P1", "Species one", "CS", 5);
+    secondCohort.workbookHash = "other-workbook-hash";
+
+    expect(buildAdvancedComparisons([firstCohort, secondCohort])).toEqual([]);
+  });
+
+  it("never pairs an accession across distinct cohorts within one immutable workbook", () => {
+    const firstCohort = row("P1", "Species one", "C", 1, "seed", "2023");
+    const secondCohort = row("P1", "Species one", "CS", 5, "seed", "2024");
+
+    expect(buildAdvancedComparisons([firstCohort, secondCohort])).toEqual([]);
+  });
+
+  it("suppresses formal p-values in the explicitly operational active-trial sensitivity analysis", () => {
+    const trials = Array.from({ length: 12 }, (_, index) => [
+      row(`P${index}`, `Species ${index}`, "C", 1),
+      row(`P${index}`, `Species ${index}`, "CS", 4)
+    ]).flat();
+    trials[0].status = "ND";
+
+    const comparison = buildAdvancedComparisons(trials, false)[0];
+    expect(comparison.completedOnly).toBe(false);
+    expect(comparison.rawPValue).toBeNull();
+    expect(comparison.adjustedPValue).toBeNull();
+    expect(comparison.eligibilityReasons).toEqual(
+      expect.arrayContaining([expect.stringMatching(/Sensitivity analysis includes active outcomes/)] )
+    );
+  });
+
+  it("keeps clustered estimates stable when input rows arrive in a different order", () => {
+    const trials = Array.from({ length: 12 }, (_, index) => [
+      row(`P${index}`, `Species ${index}`, "C", index % 3),
+      row(`P${index}`, `Species ${index}`, "CS", 3 + (index % 2))
+    ]).flat();
+    expect(buildAdvancedComparisons([...trials].reverse())).toEqual(buildAdvancedComparisons(trials));
   });
 });

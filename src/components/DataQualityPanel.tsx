@@ -2,19 +2,21 @@ import { useMemo, useState } from "react";
 import { AlertTriangle, CheckCircle2, Filter } from "lucide-react";
 import type { DataQualityIssue, PairedComparison } from "../core/types";
 
-type QualityFilter = "fix_first" | "replication" | "codebook" | "notes";
+type QualityFilter = "fix_first" | "replication" | "codebook" | "notes" | "follow_up";
 
 const filterLabels: Record<QualityFilter, string> = {
   fix_first: "Fix first",
   replication: "Replication",
   codebook: "Codebook",
-  notes: "Notes"
+  notes: "Notes",
+  follow_up: "Follow-up"
 };
 
 function issueCategory(issue: DataQualityIssue): QualityFilter {
   if (issue.category === "replication") return "replication";
   if (issue.category === "codebook") return "codebook";
   if (issue.category === "notes") return "notes";
+  if (issue.category === "follow_up") return "follow_up";
   return "fix_first";
 }
 
@@ -46,7 +48,8 @@ export function DataQualityPanel({
       fix_first: 0,
       replication: underpowered.length,
       codebook: 0,
-      notes: 0
+      notes: 0,
+      follow_up: 0
     };
     for (const issue of issues) {
       next[issueCategory(issue)] += 1;

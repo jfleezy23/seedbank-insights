@@ -15,8 +15,9 @@ This is an independent project. It is not affiliated with Frame Player, and it d
 - Imports PSU-style seed-bank propagation workbooks without committing raw workbook data.
 - Registers synced workbook sources, previews every import, and persists changed content as immutable SQLite versions.
 - Keeps individual and explicitly combined analysis scopes separate; import never silently changes the active scope.
+- Quarantines populated rows with missing required analysis fields instead of silently coercing or dropping them.
 - Computes treatment, species, trial queue, paired-comparison, and data-quality views locally.
-- Preserves raw `PC`, `LPC`, and `4PC` values, using documented 0-5 class columns directly and normalizing percentage columns for cross-row analysis.
+- Preserves raw `PC`, `LPC`, and `4PC` values, using documented 0-5 class cells directly and normalizing exact percentage cells for cross-row analysis.
 - Separates seed, stem-cutting, and division outcomes and uses species-clustered paired inference for completed trials.
 - Labels evidence as `Strong signal`, `Promising`, `Inconclusive`, or `Needs replication`.
 - Supports optional source-backed OpenAI species research and bounded Ask responses from Electron main only.
@@ -93,10 +94,22 @@ Install and run the main local gate:
 ```sh
 pnpm install
 pnpm run secret:scan
+pnpm run lint
+pnpm run typecheck
 pnpm run test
 pnpm run build
 pnpm run sca
 ```
+
+For local real-workbook acceptance, keep the raw workbooks outside git and point the tests at your synced copies:
+
+```powershell
+$env:WORKBOOK_IMPORT_TEST_PATH = "<local path>\P_accessions_new.xlsx"
+$env:READY_WORKBOOK_IMPORT_TEST_PATH = "<local path>\P_accessions_ready.xlsx"
+pnpm exec vitest run --reporter=verbose
+```
+
+The current v0.3 acceptance target is: the original workbook imports 128 analyzable trials; the larger workbook recognizes 2,204 populated records, imports 2,166 analyzable rows, exposes 38 quarantined rows, preserves source accession and `D` status, and produces non-empty Advanced Analysis contrasts when completed documented pairs exist.
 
 Run the app in development:
 
@@ -117,7 +130,9 @@ pnpm run app:build
 pnpm run app:smoke
 ```
 
-Packaging is not launch verification. Before calling desktop work complete, run the packaged app bundle/executable and inspect evidence that the main window, splash, icon resources, and first screen render correctly.
+`pnpm run app:build` creates an unpacked packaged app for human review, such as `release/win-unpacked/SeedBank Insights.exe` on Windows. Packaging is not launch verification. Before calling desktop work complete, run the packaged app bundle/executable and inspect evidence that the main window, splash, icon resources, and first screen render correctly.
+
+Do not build or attach installer artifacts such as the Windows NSIS setup executable for review checkpoints. Installer packaging is release-only and requires explicit approval after human testing passes.
 
 ## Maintainer Checklist
 
@@ -126,13 +141,19 @@ Before pushing public code or opening a release PR:
 ```sh
 git status --short
 pnpm run secret:scan
+pnpm run lint
+pnpm run typecheck
 pnpm run test
+pnpm run test:ui
+pnpm run db:smoke
 pnpm run build
 pnpm run sca
+pnpm run app:build
+pnpm run app:smoke
 ```
 
-Inspect the diff before committing and keep validation notes with the change.
+Inspect the diff before committing and keep validation notes with the change. Release-impacting changes also need a read-only AGY review with Gemini 3.5 Flash High, adjudication of every comment, and explicit human-test approval before merge, tag, upload, or release.
 
 ## License
 
-No license grant is currently included. Unless a license is added later, all rights are reserved by the project owner.
+SeedBank Insights is provided under the evaluation license in [LICENSE.md](LICENSE.md). The grant is limited to PSU Seed Bank testing, review, and evaluation unless a separate written agreement says otherwise.

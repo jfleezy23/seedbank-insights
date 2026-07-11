@@ -5,9 +5,10 @@ import path from "node:path";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { importWorkbook } from "../../src/core/workbook";
-import { pairedComparison } from "../../src/core/statistics";
+import { buildAdvancedComparisons, pairedComparison } from "../../src/core/statistics";
 
-const workbookPath = path.join(process.cwd(), "P_accessions_new.xlsx");
+const workbookPath = process.env.WORKBOOK_IMPORT_TEST_PATH ?? path.join(process.cwd(), "P_accessions_new.xlsx");
+const readyWorkbookPath = process.env.READY_WORKBOOK_IMPORT_TEST_PATH;
 const fixturePath = path.join(process.cwd(), "tests/fixtures/psu-style-accessions-fixture.xlsx");
 
 describe("committed PSU-style workbook fixture import", () => {
@@ -129,11 +130,27 @@ describe.runIf(existsSync(workbookPath))("P_accessions_new.xlsx import", () => {
 
   it("keeps cold stratification as paired evidence", async () => {
     const result = await importWorkbook(workbookPath);
-    const comparison = pairedComparison(result.trials, "C", "CS");
+    const comparison = pairedComparison(
+      result.trials.filter((trial) => trial.propaguleTypeCanonical === "seed"),
+      "C",
+      "CS"
+    );
     expect(comparison.n).toBe(38);
     expect(comparison.improved).toBe(24);
     expect(comparison.tied).toBe(11);
     expect(comparison.worse).toBe(3);
     expect(comparison.meanDiff).toBeCloseTo(1.68, 1);
+  });
+});
+
+describe.runIf(Boolean(readyWorkbookPath) && existsSync(readyWorkbookPath!))("P_accessions_ready.xlsx import", () => {
+  it("preserves completed outcomes and quarantine evidence from the larger workbook", async () => {
+    const result = await importWorkbook(readyWorkbookPath!);
+    expect(result.batch.populatedRowCount).toBe(2204);
+    expect(result.trials).toHaveLength(2166);
+    expect(result.quarantinedRows).toHaveLength(38);
+    expect(result.trials.some((trial) => trial.status === "D")).toBe(true);
+    expect(result.trials.some((trial) => Boolean(trial.sourceAccession))).toBe(true);
+    expect(buildAdvancedComparisons(result.trials)).not.toHaveLength(0);
   });
 });

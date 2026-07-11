@@ -24,13 +24,14 @@ test("Dataset Manager previews immutable imports and Advanced Analysis exposes f
       aiInsightStatus: { configured: false, state: "not_configured", message: "OpenAI optional", model: null, generatedAt: null }, speciesResearchCacheStatus: null
     };
     const dataset = { sources: [{ id: 1, label: "ready.xlsx", canonicalPath: "G:/Drive/ready.xlsx", createdAt: "2026-01-01", lastSeenAt: "2026-01-01", latestBatchId: 2, latestWorkbookHash: "b", available: true }], scopes: [scope], activeScopeId: 7 };
-    const preview = { token: "preview-1", filename: "ready.xlsx", sourcePath: "G:/Drive/ready.xlsx", workbookHash: "b2", worksheetName: "P_accesions_done", candidates: [], populatedRows: 2204, acceptedRows: 2166, quarantinedRows: [{ sourceRow: 35, worksheetName: "P_accesions_done", reasons: ["Missing treatment"], pAccession: "P35", sourceAccession: null, species: "Species test", treatment: null }], issues: [], unchangedSourceId: null, duplicateCandidates: [] };
+    const preview = { token: "preview-1", filename: "ready.xlsx", sourcePath: "G:/Drive/ready.xlsx", workbookHash: "b2", worksheetName: "P_accesions_done", candidates: [{ worksheetName: "P_accesions_done", populatedRows: 2204, headerCoverage: 9, missingHeaders: [], selected: true }, { worksheetName: "Alternate accessions", populatedRows: 2000, headerCoverage: 9, missingHeaders: [], selected: false }], populatedRows: 2204, acceptedRows: 2166, quarantinedRows: [{ sourceRow: 35, worksheetName: "P_accesions_done", reasons: ["Missing treatment"], pAccession: "P35", sourceAccession: null, species: "Species test", treatment: null }], issues: [], unchangedSourceId: null, duplicateCandidates: [] };
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }), getDashboard: async () => dashboard,
       getDataset: async () => dataset, getTreatmentCodebook: async () => [], previewWorkbooks: async () => [preview],
-      getSpeciesResearchCacheStatus: async () => ({ batchId: 2, cacheVersion: "v", totalSpecies: 0, researchedSpecies: 0, missingSpecies: [], generatedAtLatest: null }),
+      getSpeciesResearchCacheStatus: async () => ({ batchId: 2, scopeHash: "scope-hash", cacheVersion: "v", totalSpecies: 0, researchedSpecies: 0, missingSpecies: [], generatedAtLatest: null }),
       commitImportPreviews: async () => ({ dataset, dashboard }), checkWorkbookUpdate: async () => preview,
       relinkWorkbookSource: async () => preview,
+      selectPreviewWorksheet: async (_token: string, worksheetName: string) => ({ ...preview, token: "preview-2", worksheetName, populatedRows: 2000, acceptedRows: 1999 }),
       createAnalysisScope: async () => ({ dataset, dashboard }), setAnalysisScope: async () => ({ dataset, dashboard }),
       saveTreatmentCodebookEntry: async (entry: unknown) => [entry], exportAdvancedAnalysis: async () => null,
       selectWorkbook: async () => dashboard, importLocalDefaultWorkbook: async () => dashboard
@@ -42,10 +43,49 @@ test("Dataset Manager previews immutable imports and Advanced Analysis exposes f
   await expect(page.getByText("2166")).toBeVisible();
   await expect(page.getByText("Row 35: Missing treatment")).toBeVisible();
   await expect(page.getByText("Scope: Combined latest cohorts")).toBeVisible();
+  await page.getByLabel("Worksheet for ready.xlsx").selectOption("Alternate accessions");
+  await expect(page.getByText("Alternate accessions · 2000 populated rows")).toBeVisible();
   await page.getByRole("button", { name: "Advanced Analysis", exact: true }).click();
   await expect(page.getByText("CS vs C")).toBeVisible();
   await expect(page.getByText("0.91 to 1.24")).toBeVisible();
   await expect(page.getByText("Strong signal")).toBeVisible();
+});
+
+test("Advanced Analysis explains when a legacy parser omitted completed outcomes", async ({ page }) => {
+  await page.addInitScript(() => {
+    const scope = {
+      id: 17,
+      name: "P_accessions_ready.xlsx",
+      batchIds: [4],
+      workbookHashes: ["ready-hash"],
+      importVersions: [{ batchId: 4, workbookHash: "ready-hash", importFormatVersion: 1 }],
+      requiresReprocessing: true,
+      scopeHash: "legacy-scope",
+      codebookHash: "codebook",
+      codebookVersion: 1,
+      isCombined: false,
+      createdAt: "2026-01-01"
+    };
+    const dashboard = {
+      batch: { id: 4, filename: "P_accessions_ready.xlsx", importedAt: "2026-01-01", workbookHash: "ready-hash", rowCount: 2166, accessionCount: 1000, speciesCount: 500, treatmentCount: 20, warnings: [] },
+      batches: [], scope,
+      metrics: { trials: 2166, accessions: 1000, species: 500, treatments: 20, doneRate: 0, observationsExtracted: 0 },
+      treatmentSummaries: [], speciesSummaries: [], pairedComparisons: [], trialQueue: [], dataQualityIssues: [], askSuggestions: [], speciesInsights: [], advancedComparisons: [],
+      aiInsightStatus: { configured: false, state: "not_configured", message: "OpenAI optional", model: null, generatedAt: null }, speciesResearchCacheStatus: null
+    };
+    const dataset = { sources: [], scopes: [scope], activeScopeId: 17 };
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }), getDashboard: async () => dashboard,
+      getDataset: async () => dataset, getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({ batchId: 4, scopeHash: "legacy-scope", cacheVersion: "v", totalSpecies: 0, researchedSpecies: 0, missingSpecies: [], generatedAtLatest: null })
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Advanced Analysis", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("Analysis refresh required");
+  await expect(page.getByText("No eligible completed treatment contrasts in this scope.")).toHaveCount(0);
+  await page.getByRole("button", { name: "Open Dataset Manager" }).click();
+  await expect(page.getByRole("heading", { name: "Dataset Manager" })).toBeVisible();
 });
 
 test("dashboard shows cache-backed research coverage and actionable workbook queues", async ({ page }) => {
@@ -77,8 +117,9 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
           species: 2,
           accessions: 2,
           pcCount: 2,
-          pcMean: 4.5,
-          pcMedian: 4.5,
+          pcMean: 80,
+          pcMedian: 80,
+          pcScale: "percent_0_100",
           pcGe4Rate: 1,
           lpcMean: null,
           fourPcMean: null,
@@ -210,6 +251,20 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
           species: ["Phacelia heterophylla"],
           treatments: ["CS"],
           metric: "Notes"
+        },
+        {
+          id: "germination-without-liner-followup",
+          severity: "medium",
+          category: "follow_up",
+          title: "High germination without liner follow-up",
+          detail: "Rows with PC 4-5 still need production survival checks before being treated as a complete success.",
+          impact: "A germination method can look successful even if seedlings fail after transfer.",
+          action: "Record LPC and later 4PC for high-PC rows before turning them into protocol recommendations.",
+          affectedRows: 1,
+          sourceRows: [22],
+          species: ["Phacelia heterophylla"],
+          treatments: ["CS"],
+          metric: "LPC"
         }
       ],
       askSuggestions: [],
@@ -225,6 +280,7 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
     };
     const cacheStatus = {
       batchId: 22,
+      scopeHash: "hash",
       cacheVersion: "species-research-v4",
       totalSpecies: 3,
       researchedSpecies: 3,
@@ -296,6 +352,9 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
   await page.getByRole("button", { name: "Notes" }).click();
   const lowIssue = page.locator(".quality-action.low", { hasText: "Sparse observation notes" });
   await expect(lowIssue.locator("svg")).toHaveClass(/lucide-triangle-alert/);
+  await page.getByRole("button", { name: "Follow-up" }).click();
+  await expect(page.getByText("High germination without liner follow-up")).toBeVisible();
+  await expect(page.getByText("Rows 22")).toBeVisible();
   await expect(page.getByRole("heading", { name: "Review priorities" })).toHaveCount(0);
 
   await page.getByRole("button", { name: "Trial Queue", exact: true }).click();
@@ -315,6 +374,81 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
   });
   await expect(fullTreatmentLabel).toBeVisible();
   await expect(fullTreatmentLabel).toHaveCSS("white-space", "normal");
+  await expect(page.getByText("80.0%")).toBeVisible();
+  await expect(page.getByText("100", { exact: true })).toBeVisible();
+  await expect
+    .poll(() =>
+      page.locator(".native-chart-bar").first().evaluate((bar) => Number.parseFloat((bar as HTMLElement).style.width))
+    )
+    .toBeLessThanOrEqual(100);
+});
+
+test("paired comparison direction bars remain valid when no pairs are available", async ({ page }) => {
+  await page.addInitScript(() => {
+    const dashboard = {
+      batch: {
+        id: 31,
+        filename: "zero-pairs.xlsx",
+        importedAt: "2026-01-01T00:00:00.000Z",
+        workbookHash: "zero-pairs-hash",
+        rowCount: 0,
+        accessionCount: 0,
+        speciesCount: 0,
+        treatmentCount: 0,
+        warnings: []
+      },
+      metrics: { trials: 0, accessions: 0, species: 0, treatments: 0, doneRate: 0, observationsExtracted: 0 },
+      treatmentSummaries: [],
+      speciesSummaries: [],
+      pairedComparisons: [
+        {
+          baseline: "C",
+          treatment: "CS",
+          n: 0,
+          improved: 0,
+          tied: 0,
+          worse: 0,
+          meanDiff: 0,
+          medianDiff: 0,
+          ciLow: 0,
+          ciHigh: 0,
+          speciesCount: 0,
+          confidence: "Inconclusive",
+          falsePositiveRisk: "No pairs are available.",
+          falseNegativeRisk: "No pairs are available.",
+          additionalTrialsNeeded: 1,
+          replicationTargetBasis: "Add paired rows before assessing this comparison.",
+          examples: []
+        }
+      ],
+      trialQueue: [],
+      dataQualityIssues: [],
+      askSuggestions: [],
+      speciesInsights: [],
+      aiInsightStatus: {
+        configured: false,
+        state: "not_configured",
+        message: "OpenAI is optional.",
+        model: null,
+        generatedAt: null
+      },
+      speciesResearchCacheStatus: null
+    };
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
+      getDashboard: async () => dashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => []
+    };
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Treatment Comparator", exact: true }).click();
+  const directionBars = page.locator(".direction-bars > span");
+  await expect(directionBars).toHaveCount(3);
+  await expect
+    .poll(() => directionBars.evaluateAll((bars) => bars.map((bar) => bar.style.getPropertyValue("--bar"))))
+    .toEqual(["0%", "0%", "0%"]);
 });
 
 test("overview cards navigate to dedicated workspaces", async ({ page }) => {
@@ -380,8 +514,16 @@ test("sidebar navigation renders distinct workspaces and settings state", async 
   await page.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
   await expect(page.getByLabel("OpenAI API key")).toHaveAttribute("type", "password");
-  await page.getByRole("button", { name: "Close settings" }).click();
+  const closeSettings = page.getByRole("button", { name: "Close settings" });
+  const apiKeyInput = page.getByLabel("OpenAI API key");
+  await expect(closeSettings).toBeFocused();
+  await closeSettings.press("Shift+Tab");
+  await expect(apiKeyInput).toBeFocused();
+  await apiKeyInput.press("Tab");
+  await expect(closeSettings).toBeFocused();
+  await closeSettings.press("Escape");
   await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Settings" })).toBeFocused();
 });
 
 test("species explorer researches a species with workbook-backed AI assessment", async ({ page }) => {
@@ -485,7 +627,6 @@ test("species explorer researches a species with workbook-backed AI assessment",
       resolveSpeciesResearch = () => resolve(researchResult);
     });
     (window as any).resolveSpeciesResearch = () => resolveSpeciesResearch?.();
-    let keyCleared = false;
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: true, safeStorageAvailable: true }),
       getDashboard: async () => baseDashboard,
@@ -514,6 +655,7 @@ test("species explorer researches a species with workbook-backed AI assessment",
   await page.goto("/");
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
   await expect(page.getByText("Family unknown until research runs")).toBeVisible();
+  await page.getByRole("button", { name: "Run research" }).click();
   await expect(page.getByRole("button", { name: "Researching..." })).toBeDisabled();
   await expect(page.getByRole("heading", { name: "Running source-backed germination research" })).toBeVisible();
   await expect(page.getByText("Searching web sources, checking taxonomy context, and connecting findings to workbook rows.")).toBeVisible();
@@ -789,6 +931,9 @@ test("saving a key immediately enables AI controls without auto-generating", asy
   await expect.poll(() => page.evaluate(() => (window as any).savedKeyBatchId)).toBe(8);
   await expect.poll(() => page.evaluate(() => (window as any).keySaveGenerationArgs ?? null)).toBeNull();
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
+  await expect(page.getByRole("button", { name: "Run research" })).toBeEnabled();
+  await expect.poll(() => page.evaluate(() => (window as any).keySaveResearchArgs ?? null)).toBeNull();
+  await page.getByRole("button", { name: "Run research" }).click();
   await expect.poll(() => page.evaluate(() => (window as any).keySaveResearchArgs)).toEqual({
     batchId: 8,
     species: "Lomatium testii",
@@ -885,12 +1030,12 @@ test("clearing a key refreshes species explorer AI controls", async ({ page }) =
 
   await page.goto("/");
   await page.getByRole("button", { name: "Species Explorer", exact: true }).click();
+  await page.getByRole("button", { name: "Run research" }).click();
   await expect(page.getByRole("button", { name: "Researching..." })).toBeVisible();
 
   await page.getByRole("button", { name: "Settings" }).click();
   await page.getByRole("button", { name: "Clear key" }).click();
   await page.getByRole("button", { name: "Close settings" }).click();
 
-  await expect(page.getByRole("button", { name: "Run research" })).toHaveCount(0);
-  await expect(page.getByText("No cached AI research was found for this species. Add an OpenAI key to generate it.")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Load cached research" })).toBeDisabled();
 });

@@ -55,6 +55,12 @@ export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
     .map(([key, rows]) => {
       const [type, treatment] = key.split("\u0000") as [PropaguleType, string];
       const pcValues = rows.map((row) => row.pc).filter(definedScore);
+      const pcScales = new Set(
+        rows
+          .filter((row) => definedScore(row.pc))
+          .map((row) => row.pcScale)
+          .filter((scale): scale is NonNullable<TrialRecord["pcScale"]> => Boolean(scale))
+      );
       const lpcValues = rows.map((row) => row.lpc).filter(definedScore);
       const fourPcValues = rows.map((row) => row.fourPc).filter(definedScore);
       const species = new Set(rows.map((row) => row.species)).size;
@@ -64,6 +70,8 @@ export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
         ? round(pcValues.filter((value) => value >= 4).length / pcValues.length, 3)
         : null;
       const confidence = confidenceForTreatment(rows.length, species, pcValues.length, pcMean, pcGe4Rate);
+      const pcScale: TreatmentSummary["pcScale"] =
+        pcScales.size === 0 ? null : pcScales.size === 1 ? [...pcScales][0] : "mixed";
       const warning =
         confidence === "Needs replication"
           ? "One-off or nearly one-off treatment result. Do not generalize yet."
@@ -73,6 +81,7 @@ export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
       return {
         treatment,
         propaguleType: type,
+        pcScale,
         rows: rows.length,
         species,
         accessions,
@@ -111,11 +120,12 @@ function bootstrapInterval(values: number[], iterations = 600): [number, number]
     return seed / 0x7fffffff;
   };
 
+  const orderedValues = [...values].sort((a, b) => a - b);
   const means: number[] = [];
   for (let i = 0; i < iterations; i += 1) {
     const sample: number[] = [];
-    for (let j = 0; j < values.length; j += 1) {
-      sample.push(values[Math.floor(random() * values.length)]);
+    for (let j = 0; j < orderedValues.length; j += 1) {
+      sample.push(orderedValues[Math.floor(random() * orderedValues.length)]);
     }
     means.push(mean(sample) ?? 0);
   }
@@ -131,7 +141,8 @@ function confidenceForComparison(
   ciLow: number,
   ciHigh: number
 ): ConfidenceLabel {
-  const directionConsistency = n ? Math.max(improved, worse) / n : 0;
+  const nonTies = improved + worse;
+  const directionConsistency = nonTies ? Math.max(improved, worse) / nonTies : 0;
   const intervalCrossesZero = ciLow <= 0 && ciHigh >= 0;
 
   if (n < 3) return "Needs replication";
@@ -190,10 +201,14 @@ export function pairedComparison(
   baseline: string,
   treatment: string
 ): PairedComparison {
+  const propaguleTypes = new Set(trials.filter((trial) => trial.pc !== null).map(propaguleType));
+  if (propaguleTypes.size > 1) {
+    throw new Error("pairedComparison accepts one propagule type at a time; use buildDefaultComparisons for mixed data.");
+  }
   const byAccession = new Map<string, TrialRecord[]>();
   for (const trial of trials) {
     if (trial.pc === null) continue;
-    const pairKey = `${trial.pAccession}|||${trial.species.trim().toLowerCase()}`;
+    const pairKey = experimentalUnitKey(trial);
     byAccession.set(pairKey, [...(byAccession.get(pairKey) ?? []), trial]);
   }
 
@@ -263,6 +278,9 @@ export function pairedComparison(
 }
 
 export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison[] {
+  // The dashboard is decision support, not a formal analysis. It deliberately
+  // includes active outcomes and suppresses formal p-values; the Advanced
+  // Analysis workspace is completed-trials-only by default.
   const comparisons = buildAdvancedComparisons(trials, false).map<PairedComparison>((comparison) => ({
     baseline: comparison.baseline,
     treatment: comparison.treatment,
@@ -280,18 +298,26 @@ export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison
     ciHigh: comparison.ciHigh,
     nonTieWinRate: comparison.nonTieWinRate,
     speciesMeanDiff: comparison.speciesMeanDiff,
-    adjustedPValue: comparison.adjustedPValue,
+    adjustedPValue: null,
     confidence: comparison.confidence,
-    falsePositiveRisk: comparison.formalEligible
-      ? "Species-clustered uncertainty and multiplicity correction are available in Advanced Analysis."
-      : `Descriptive only: ${comparison.eligibilityReasons.join(" ")}`,
+    falsePositiveRisk:
+      "Operational comparison includes active outcomes and is not a formal hypothesis test. Use completed-trial Advanced Analysis before making a statistical claim.",
     falseNegativeRisk:
       comparison.ties > comparison.wins + comparison.losses
         ? "Many paired outcomes are tied; review the non-tie direction and cohort detail."
         : "Review species and cohort breadth before changing a protocol.",
     additionalTrialsNeeded: Math.max(0, 10 - comparison.speciesCount),
-    replicationTargetBasis: "Additional species needed for formal-review eligibility; this is not a power estimate.",
-    examples: []
+    replicationTargetBasis: "Additional completed species needed for formal-review eligibility; this is not a power estimate.",
+    examples: pairedComparison(
+      trials.filter(
+        (trial) =>
+          definedScore(trial.pc) &&
+          propaguleType(trial) === comparison.propaguleType &&
+          (trial.treatment === comparison.baseline || trial.treatment === comparison.treatment)
+      ),
+      comparison.baseline,
+      comparison.treatment
+    ).examples
   }));
   if (comparisons.length <= 1) return comparisons;
   return comparisons.map((comparison) => ({
@@ -318,15 +344,30 @@ function propaguleType(trial: TrialRecord): PropaguleType {
 
 function experimentalUnitKey(trial: TrialRecord): string {
   return [
+    // A natural key is only meaningful within the immutable workbook version
+    // that supplied it. This prevents false pairs across selected cohorts.
+    trial.workbookHash ??
+      (trial.importBatchId ? `batch:${trial.importBatchId}` : trial.sourceId ? `source:${trial.sourceId}` : "unscoped"),
     trial.pAccession,
     trial.sourceAccession || "<missing-source>",
     trial.species.trim().toLowerCase(),
-    propaguleType(trial)
+    propaguleType(trial),
+    trial.cohort?.trim().toLocaleLowerCase() || "<unknown-cohort>"
   ].join("|||");
 }
 
+function cohortForRows(rows: TrialRecord[]): string {
+  const cohorts = [...new Set(rows.map((row) => row.cohort?.trim()).filter((value): value is string => Boolean(value)))];
+  if (cohorts.length === 1) return cohorts[0];
+  return cohorts.length ? "Mixed cohort" : "Unknown";
+}
+
 function clusterInterval(speciesEffects: Map<string, number>, iterations = 2000): [number, number] {
-  const values = [...speciesEffects.values()];
+  // Species are intentionally equal-weighted here: this is the species-clustered
+  // estimand used by Advanced Analysis, not a row-weighted accession interval.
+  const values = [...speciesEffects.entries()]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([, value]) => value);
   if (values.length < 2) {
     const value = values[0] ?? 0;
     return [value, value];
@@ -344,7 +385,7 @@ function clusterInterval(speciesEffects: Map<string, number>, iterations = 2000)
     }
     estimates.push(total / values.length);
   }
-  return [round(percentile(estimates, 0.025), 2), round(percentile(estimates, 0.975), 2)];
+  return [percentile(estimates, 0.025), percentile(estimates, 0.975)];
 }
 
 function exactSignPValue(wins: number, losses: number): number | null {
@@ -352,6 +393,8 @@ function exactSignPValue(wins: number, losses: number): number | null {
   if (!n) return null;
   const tail = Math.min(wins, losses);
   let probability = 0.5 ** n;
+  // cumulative starts with k=0. Each loop advances to k+1, so k < tail includes
+  // the exact tail boundary without adding one binomial term too many.
   let cumulative = probability;
   for (let k = 0; k < tail; k += 1) {
     probability *= (n - k) / (k + 1);
@@ -372,17 +415,25 @@ function holmAdjust(comparisons: AdvancedComparison[]): void {
   });
 }
 
-function evidenceTier(comparison: AdvancedComparison): ConfidenceLabel {
+function evidenceTier(
+  comparison: AdvancedComparison,
+  raw: {
+    speciesMeanDiff: number;
+    ciLow: number;
+    ciHigh: number;
+    cohortDirections: Array<{ cohort: string; speciesCount: number; meanDiff: number }>;
+  } = comparison
+): ConfidenceLabel {
   const nonTiedSpecies = comparison.speciesWins + comparison.speciesLosses;
   const speciesWinRate = nonTiedSpecies ? comparison.speciesWins / nonTiedSpecies : 0;
   const direction = Math.max(speciesWinRate, 1 - speciesWinRate);
-  const effect = Math.abs(comparison.speciesMeanDiff);
-  const repeatedCohorts = comparison.cohortDirections.filter(
-    (cohort) => cohort.speciesCount >= 5 && Math.sign(cohort.meanDiff) === Math.sign(comparison.speciesMeanDiff)
+  const effect = Math.abs(raw.speciesMeanDiff);
+  const repeatedCohorts = raw.cohortDirections.filter(
+    (cohort) => cohort.speciesCount >= 5 && Math.sign(cohort.meanDiff) === Math.sign(raw.speciesMeanDiff)
   ).length;
   if (comparison.speciesCount < 5 || nonTiedSpecies < 5) return "Needs replication";
   if (
-    comparison.ciLow <= 0 && comparison.ciHigh >= 0 ||
+    raw.ciLow <= 0 && raw.ciHigh >= 0 ||
     comparison.adjustedPValue === null ||
     comparison.adjustedPValue >= 0.05
   ) return "Inconclusive";
@@ -438,6 +489,15 @@ export function buildAdvancedAnalysisRows(
         }
         const first = rows[0];
         const type = propaguleType(first);
+        const sourceRows = (armRows: TrialRecord[]) =>
+          [...new Set(armRows.map((row) => row.sourceRow))].sort((a, b) => a - b).join("|");
+        const provenance = (armRows: TrialRecord[]) => ({
+          filename: [...new Set(armRows.map((row) => row.sourceFilename ?? ""))].sort().join("|"),
+          worksheet: [...new Set(armRows.map((row) => row.sourceWorksheet ?? ""))].sort().join("|"),
+          workbookHash: [...new Set(armRows.map((row) => row.workbookHash ?? ""))].sort().join("|")
+        });
+        const baselineProvenance = provenance(baseline.rows);
+        const treatmentProvenance = provenance(treatment.rows);
         pairRows.push({
           comparisonId: [type, baseline.treatment, treatment.treatment].join(":"),
           propaguleType: type,
@@ -446,16 +506,22 @@ export function buildAdvancedAnalysisRows(
           pAccession: first.pAccession,
           sourceAccession: first.sourceAccession,
           species: first.species,
-          cohort: first.cohort ?? "Unknown",
+          cohort: cohortForRows(rows),
           baselineScore: round(baseline.score, 2),
           treatmentScore: round(treatment.score, 2),
           diff: round(treatment.score - baseline.score, 2),
-          sourceFilename: first.sourceFilename ?? "",
-          worksheet: first.sourceWorksheet ?? "",
-          workbookHash: first.workbookHash ?? "",
-          sourceRows: [...new Set([...baseline.rows, ...treatment.rows].map((row) => row.sourceRow))]
-            .sort((a, b) => a - b)
-            .join("|")
+          sourceFilename: baselineProvenance.filename,
+          worksheet: baselineProvenance.worksheet,
+          workbookHash: baselineProvenance.workbookHash,
+          sourceRows: sourceRows([...baseline.rows, ...treatment.rows]),
+          baselineSourceFilename: baselineProvenance.filename,
+          baselineWorksheet: baselineProvenance.worksheet,
+          baselineWorkbookHash: baselineProvenance.workbookHash,
+          baselineSourceRows: sourceRows(baseline.rows),
+          treatmentSourceFilename: treatmentProvenance.filename,
+          treatmentWorksheet: treatmentProvenance.worksheet,
+          treatmentWorkbookHash: treatmentProvenance.workbookHash,
+          treatmentSourceRows: sourceRows(treatment.rows)
         });
       }
     }
@@ -519,7 +585,7 @@ export function buildAdvancedComparisons(
           {
             species: first.species.trim().toLowerCase(),
             source: first.sourceAccession || first.pAccession,
-            cohort: first.cohort ?? "Unknown",
+            cohort: cohortForRows(rows),
             diff: round(treatmentScore - baselineScore, 2)
           }
         ]);
@@ -527,6 +593,15 @@ export function buildAdvancedComparisons(
     }
   }
   const comparisons: AdvancedComparison[] = [];
+  const rawMetricsByComparisonId = new Map<
+    string,
+    {
+      speciesMeanDiff: number;
+      ciLow: number;
+      ciHigh: number;
+      cohortDirections: Array<{ cohort: string; speciesCount: number; meanDiff: number }>;
+    }
+  >();
   for (const [key, pairEffects] of effects.entries()) {
     const [type, baseline, treatment] = key.split("\u0000") as [PropaguleType, string, string];
     const bySpecies = new Map<string, number[]>();
@@ -534,7 +609,9 @@ export function buildAdvancedComparisons(
       bySpecies.set(effect.species, [...(bySpecies.get(effect.species) ?? []), effect.diff]);
     }
     const speciesEffects = new Map(
-      [...bySpecies.entries()].map(([species, values]) => [species, mean(values) ?? 0])
+      [...bySpecies.entries()]
+        .sort(([left], [right]) => left.localeCompare(right))
+        .map(([species, values]) => [species, mean(values) ?? 0])
     );
     const values = pairEffects.map((effect) => effect.diff);
     const speciesValues = [...speciesEffects.values()];
@@ -546,14 +623,38 @@ export function buildAdvancedComparisons(
     const documented = analyzable
       .filter((trial) => propaguleType(trial) === type && [baseline, treatment].includes(trial.treatment))
       .every((trial) => trial.analysisEligibility === "eligible");
-    const formalEligible = documented && speciesEffects.size >= 10 && speciesWins + speciesLosses >= 5;
+    const formalEligible = completedOnly && documented && speciesEffects.size >= 10 && speciesWins + speciesLosses >= 5;
     const byCohort = new Map<string, PairEffect[]>();
     pairEffects.forEach((effect) =>
       byCohort.set(effect.cohort, [...(byCohort.get(effect.cohort) ?? []), effect])
     );
     const [ciLow, ciHigh] = clusterInterval(speciesEffects);
+    const cohortDirectionsRaw = [...byCohort.entries()]
+      .sort(([left], [right]) => left.localeCompare(right))
+      .map(([cohort, cohortEffects]) => {
+        const byCohortSpecies = new Map<string, number[]>();
+        for (const effect of cohortEffects) {
+          byCohortSpecies.set(effect.species, [...(byCohortSpecies.get(effect.species) ?? []), effect.diff]);
+        }
+        const speciesValues = [...byCohortSpecies.entries()]
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([, effects]) => mean(effects) ?? 0);
+        return {
+          cohort,
+          speciesCount: speciesValues.length,
+          meanDiff: mean(speciesValues) ?? 0
+        };
+      });
+    const speciesMeanDiff = mean(speciesValues) ?? 0;
+    const comparisonId = [type, baseline, treatment].join(":");
+    rawMetricsByComparisonId.set(comparisonId, {
+      speciesMeanDiff,
+      ciLow,
+      ciHigh,
+      cohortDirections: cohortDirectionsRaw
+    });
     comparisons.push({
-      id: [type, baseline, treatment].join(":"),
+      id: comparisonId,
       propaguleType: type,
       baseline,
       treatment,
@@ -569,30 +670,35 @@ export function buildAdvancedComparisons(
       speciesLosses,
       nonTieWinRate: wins + losses ? round(wins / (wins + losses), 3) : null,
       medianDiff: round(median(values) ?? 0, 2),
-      speciesMeanDiff: round(mean(speciesValues) ?? 0, 2),
-      ciLow,
-      ciHigh,
+      speciesMeanDiff: round(speciesMeanDiff, 2),
+      ciLow: round(ciLow, 2),
+      ciHigh: round(ciHigh, 2),
       rawPValue: formalEligible ? exactSignPValue(speciesWins, speciesLosses) : null,
       adjustedPValue: null,
-      cohortDirections: [...byCohort.entries()].map(([cohort, cohortEffects]) => ({
-        cohort,
-        speciesCount: new Set(cohortEffects.map((effect) => effect.species)).size,
-        meanDiff: round(mean(cohortEffects.map((effect) => effect.diff)) ?? 0, 2)
-      })),
+      cohortDirections: cohortDirectionsRaw.map((cohort) => ({ ...cohort, meanDiff: round(cohort.meanDiff, 2) })),
       confidence: "Inconclusive",
       formalEligible,
       eligibilityReasons: [
+        !completedOnly ? "Sensitivity analysis includes active outcomes; formal p-values are intentionally suppressed." : null,
         !documented ? "One or more treatment tokens are not mapped in the active codebook." : null,
         speciesEffects.size < 10 ? "Fewer than 10 species." : null,
         speciesWins + speciesLosses < 5 ? "Fewer than 5 non-tied species." : null
       ].filter((reason): reason is string => Boolean(reason))
     });
   }
+  // Multiplicity correction is scoped per propagule type because seed,
+  // cutting, and division PC endpoints have different meanings.
   for (const type of ["seed", "stem_cutting", "division"] as const) {
     holmAdjust(comparisons.filter((comparison) => comparison.propaguleType === type));
   }
   comparisons.forEach((comparison) => {
-    comparison.confidence = evidenceTier(comparison);
+    const raw = rawMetricsByComparisonId.get(comparison.id) ?? {
+      speciesMeanDiff: comparison.speciesMeanDiff,
+      ciLow: comparison.ciLow,
+      ciHigh: comparison.ciHigh,
+      cohortDirections: comparison.cohortDirections
+    };
+    comparison.confidence = evidenceTier(comparison, raw);
   });
   return comparisons.sort(
     (left, right) =>
@@ -690,16 +796,14 @@ export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {
     if (existing.pc !== item.pc) existing.pc = null;
   }
 
-  return [...grouped.values()]
-    .sort((a, b) => {
-      const priorityOrder = { high: 0, medium: 1, low: 2 };
-      return (
-        priorityOrder[a.priority] - priorityOrder[b.priority] ||
-        String(a.nextDate ?? "9999").localeCompare(String(b.nextDate ?? "9999")) ||
-        a.species.localeCompare(b.species)
-      );
-    })
-    .slice(0, 18);
+  return [...grouped.values()].sort((a, b) => {
+    const priorityOrder = { high: 0, medium: 1, low: 2 };
+    return (
+      priorityOrder[a.priority] - priorityOrder[b.priority] ||
+      String(a.nextDate ?? "9999").localeCompare(String(b.nextDate ?? "9999")) ||
+      a.species.localeCompare(b.species)
+    );
+  });
 }
 
 export function qualityIssues(trials: TrialRecord[]): DataQualityIssue[] {

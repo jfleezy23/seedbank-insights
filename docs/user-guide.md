@@ -17,7 +17,7 @@ pnpm run app:build
 pnpm run app:smoke
 ```
 
-Then launch the packaged app bundle/executable itself.
+Then launch the unpacked packaged app bundle/executable itself. Installer builds are release artifacts and are not part of normal human-review checkpoints.
 
 ## Manage Workbook Sources
 
@@ -28,10 +28,12 @@ The app checks:
 - file extension
 - file size limit
 - required headers
+- accession-sheet candidates by header coverage and populated-row score
 - deterministic header aliases
 - optional AI header alias fallback when configured
 - accepted and quarantined populated rows
 - unknown treatment codes, duplicate candidates, and invalid dates
+- raw and normalized cell evidence for supported fields
 
 Import never changes the active analysis scope. Choose an individual scope or explicitly create a combined scope in Dataset Manager. A combined scope can contain only one version per source and is blocked when cross-source natural keys overlap.
 
@@ -82,6 +84,8 @@ Comparison warnings call out:
 - underpowered comparisons
 
 The **Advanced Analysis** workspace defaults to completed (`D`) trials, keeps propagule types separate, aggregates genuine treatment replicates by median ordinal score, and reports species-clustered intervals plus Holm-adjusted exact sign tests. Export creates pair-level CSV, species-level CSV, and a JSON reproducibility manifest.
+
+If Advanced Analysis reports no eligible completed contrasts, check Dataset Manager first. Older imports may need to be refreshed so `D/ND`, source accession, propagule type, codebook eligibility, and workbook provenance are present. Rows with undocumented treatments or unresolved duplicate classification remain descriptive-only.
 
 ## Use The Trial Queue
 

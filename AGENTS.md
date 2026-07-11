@@ -33,6 +33,32 @@ Do not claim SCA, tests, build, or review passed unless they actually ran and th
 
 For desktop apps, packaging is not launch verification. Before claiming a packaged app works, run the packaged executable/app bundle itself, observe that the main window loads, and capture or inspect evidence from the launched app. `electron-builder --dir` only proves packaging completed; it does not prove the app starts.
 
+For human-review checkpoints, build and hand off the unpacked packaged app only. Installer artifacts such as Windows NSIS setup files or macOS DMGs are release artifacts; do not build, upload, or present them as candidates until the user explicitly confirms human testing passed and asks for release packaging.
+
+## Release Review Cycle
+
+Before handing a release candidate to the user, follow this order:
+
+1. Review the complete final diff after all fixes; adjudicate independent-review comments and fix every validated defect.
+2. Run the independent-review and security-review gates. If a required reviewer is unavailable, record the exact blocker and do not claim it passed.
+3. Run every configured quality gate: lint, typecheck, unit/integration tests, UI tests, database/migration smoke, SCA, and secret scan. Configure a practical missing gate instead of silently substituting another one.
+4. Resolve lint errors and every blocking finding. Explicitly triage warnings; never hide them without a written reason.
+5. Only after the gates pass, package the current revision as an unpacked app, run packaged-launch smoke against that exact artifact, record its hash, and hand it to the user for human testing.
+6. Never publish, tag, merge, upload, or release until the user explicitly confirms human testing passed.
+
+If a fix changes source, dependencies, configuration, or packaging, rerun the affected reviews and gates before making another candidate.
+
+## Independent AGY Review Gate
+
+- `AGY` means the Google Antigravity CLI (`agy`). It is a required independent reviewer for release-impacting changes.
+- Run AGY with `Gemini 3.5 Flash (High)` and high reasoning. Prefer non-interactive, sandboxed, read-only review mode against the exact Git diff under review.
+- If `agy` is unavailable, install it only from Google's official Antigravity CLI distribution and verify the requested model appears in `agy models`. Do not substitute another model or silently skip the gate.
+- If AGY cannot run because of authentication, credits, or workspace access, capture the exact blocker and report the gate as blocked; never imply that AGY reviewed the change.
+- Instruct AGY not to edit files, commit, push, merge, publish, or change GitHub state. Its job is adversarial review: correctness, regressions, data preservation, migrations, statistical validity, Electron security boundaries, tests, and release risks.
+- Collect AGY's complete feedback and adjudicate every comment against exact code and requirements. Classify each item as valid, invalid, duplicate, or needing more evidence; record the reason.
+- Fix every validated blocking bug, add targeted regression coverage, and rerun the targeted and full required gates. Do not dismiss findings merely because existing tests pass.
+- AGY review and automated gates do not replace human testing. Do not merge, tag, upload assets, or publish a release until the user explicitly confirms the human test pass.
+
 ## Security And AI
 
 - OpenAI is assistive only. Deterministic code owns calculations, confidence labels, and evidence selection.
@@ -43,8 +69,9 @@ For desktop apps, packaging is not launch verification. Before claiming a packag
 
 ## Statistical Guardrails
 
-- Preserve raw `PC`, `LPC`, and `4PC` values. Treat a score column containing only 0-5 values as ordinal classes; a valid value above 5 identifies that column as exact percentages, which must be normalized to the documented classes for cross-row analysis.
-- Prefer paired accession/species comparisons over raw treatment averages.
+- Preserve raw `PC`, `LPC`, and `4PC` values. Detect score scale per endpoint and row: values above 5 are exact percentages normalized to documented 0-5 classes, invalid values are retained as raw evidence but excluded, and mixed nonzero low values are ambiguous when the same endpoint also contains percentages.
+- Never pool seed, stem-cutting, and division `PC` outcomes. Their endpoint meanings differ.
+- Prefer paired experimental-unit comparisons over raw treatment averages. The formal unit includes workbook/import version, propagation accession, source accession when available, species, propagule type, and cohort.
 - Label evidence as `Strong signal`, `Promising`, `Inconclusive`, or `Needs replication`.
 - Guard against false positives: warn on one-off high scores, rare treatments, multiple comparisons, uneven species mix, and intervals that cross no effect.
 - Guard against false negatives: call out underpowered comparisons and preserve promising-but-unproven treatments.
@@ -62,6 +89,9 @@ Append new implementation or data insights here as they are discovered.
 - Initial workbook profile: `P_accessions_new.xlsx` has one main data sheet, `P_accesions`, plus self-documenting `Column headers` and `Data types` sheets.
 - Current local workbook grain is one propagation accession plus one treatment per row.
 - Current local workbook profile found 128 core trial rows, 53 propagation accessions, 52 species, and 17 treatment strings.
+- v0.3 workbook acceptance includes the larger `P_accessions_ready.xlsx` profile: 2,204 populated records, 2,166 analyzable rows, and 38 quarantined rows with missing required treatment evidence.
+- Header aliases must preserve source accession, status, and location variants such as `UorSBacc`, `D/ND`, and `L(R:C;Z)`.
+- Advanced Analysis being blank for a real workbook is usually a parser/scope/eligibility problem to investigate, not an acceptable empty state. Refresh legacy imports so `D/ND`, source accession, propagule type, codebook eligibility, and provenance are present.
 - Early paired analysis showed cold stratification vs control as a strong candidate signal: 38 paired comparisons, 24 improved, 11 tied, 3 worse, mean `PC` lift about `+1.68`.
 - `WS+CS` vs `CS` is mixed in the current sample: 11 paired comparisons, 3 improved, 3 tied, 5 worse. The UI must not over-recommend it.
 - Notes are analytically valuable: current parsing can extract germinated counts and in-production counts from many rows, but raw snippets must remain visible for audit.
@@ -105,3 +135,4 @@ Append new implementation or data insights here as they are discovered.
 - Public macOS releases are a notarization workflow, not merely `electron-builder` packaging: preflight a valid notary keychain profile, build a signed arm64 DMG, verify `codesign` and `hdiutil`, submit the DMG with `xcrun notarytool submit --wait --keychain-profile <profile>`, staple and validate it, mount it, and verify the contained app with Gatekeeper before attaching it to GitHub. Do not publish a signed-but-unnotarized DMG as a public release.
 - The notary preflight must happen before building release artifacts: `xcrun notarytool history --keychain-profile <profile>`. If the profile is missing, recreate it interactively with `xcrun notarytool store-credentials`; never put the app-specific password in shell history, source files, logs, GitHub secrets, or release notes.
 - A public release asset must contain no raw workbook, SQLite database, API key, or AI response cache. Confirm `assets/ai-response-cache/`, `P_accessions_new.xlsx`, `.env*`, `*.sqlite*`, and release build output remain ignored/untracked before staging and before GitHub upload.
+- Windows review candidates are unpacked app directories, not NSIS installers. Build `release/win-unpacked/SeedBank Insights.exe` for human testing; build setup executables only when the user explicitly approves release packaging after human testing passes.
