@@ -132,6 +132,22 @@ describe("pairedComparison", () => {
     expect(comparisons[0].examples.length).toBeGreaterThan(0);
   });
 
+  it("uses operational evidence tiers for dashboard comparisons without formal p-values", () => {
+    const comparisons = buildDefaultComparisons(
+      Array.from({ length: 12 }, (_, index) => [
+        trial(`P${index}`, `Species ${index}`, "C", 1),
+        trial(`P${index}`, `Species ${index}`, "CS", 4)
+      ]).flat()
+    );
+
+    expect(comparisons[0]).toMatchObject({
+      baseline: "C",
+      treatment: "CS",
+      adjustedPValue: null,
+      confidence: "Strong signal"
+    });
+  });
+
   it("does not dilute directional consistency with tied operational pairs", () => {
     const trials = Array.from({ length: 10 }, (_, index) => [
       trial(`P${index}`, `Species ${index}`, "C", 2),

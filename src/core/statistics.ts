@@ -287,44 +287,55 @@ export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison
   // The dashboard is decision support, not a formal analysis. It deliberately
   // includes active outcomes and suppresses formal p-values; the Advanced
   // Analysis workspace is completed-trials-only by default.
-  const comparisons = buildAdvancedComparisons(trials, false).map<PairedComparison>((comparison) => ({
-    baseline: comparison.baseline,
-    treatment: comparison.treatment,
-    n: comparison.pairCount,
-    speciesCount: comparison.speciesCount,
-    sourceCount: comparison.sourceCount,
-    propaguleType: comparison.propaguleType,
-    completedOnly: false,
-    improved: comparison.wins,
-    tied: comparison.ties,
-    worse: comparison.losses,
-    meanDiff: comparison.speciesMeanDiff,
-    medianDiff: comparison.medianDiff,
-    ciLow: comparison.ciLow,
-    ciHigh: comparison.ciHigh,
-    nonTieWinRate: comparison.nonTieWinRate,
-    speciesMeanDiff: comparison.speciesMeanDiff,
-    adjustedPValue: null,
-    confidence: comparison.confidence,
-    falsePositiveRisk:
-      "Operational comparison includes active outcomes and is not a formal hypothesis test. Use completed-trial Advanced Analysis before making a statistical claim.",
-    falseNegativeRisk:
-      comparison.ties > comparison.wins + comparison.losses
-        ? "Many paired outcomes are tied; review the non-tie direction and cohort detail."
-        : "Review species and cohort breadth before changing a protocol.",
-    additionalTrialsNeeded: Math.max(0, 10 - comparison.speciesCount),
-    replicationTargetBasis: "Additional completed species needed for formal-review eligibility; this is not a power estimate.",
-    examples: pairedComparison(
-      trials.filter(
-        (trial) =>
-          definedScore(trial.pc) &&
-          propaguleType(trial) === comparison.propaguleType &&
-          (trial.treatment === comparison.baseline || trial.treatment === comparison.treatment)
-      ),
-      comparison.baseline,
-      comparison.treatment
-    ).examples
-  }));
+  const comparisons = buildAdvancedComparisons(trials, false).map<PairedComparison>((comparison) => {
+    const confidence = confidenceForComparison(
+      comparison.pairCount,
+      comparison.speciesCount,
+      comparison.wins,
+      comparison.losses,
+      comparison.speciesMeanDiff,
+      comparison.ciLow,
+      comparison.ciHigh
+    );
+    return {
+      baseline: comparison.baseline,
+      treatment: comparison.treatment,
+      n: comparison.pairCount,
+      speciesCount: comparison.speciesCount,
+      sourceCount: comparison.sourceCount,
+      propaguleType: comparison.propaguleType,
+      completedOnly: false,
+      improved: comparison.wins,
+      tied: comparison.ties,
+      worse: comparison.losses,
+      meanDiff: comparison.speciesMeanDiff,
+      medianDiff: comparison.medianDiff,
+      ciLow: comparison.ciLow,
+      ciHigh: comparison.ciHigh,
+      nonTieWinRate: comparison.nonTieWinRate,
+      speciesMeanDiff: comparison.speciesMeanDiff,
+      adjustedPValue: null,
+      confidence,
+      falsePositiveRisk:
+        "Operational comparison includes active outcomes and is not a formal hypothesis test. Use completed-trial Advanced Analysis before making a statistical claim.",
+      falseNegativeRisk:
+        comparison.ties > comparison.wins + comparison.losses
+          ? "Many paired outcomes are tied; review the non-tie direction and cohort detail."
+          : "Review species and cohort breadth before changing a protocol.",
+      additionalTrialsNeeded: Math.max(0, 10 - comparison.speciesCount),
+      replicationTargetBasis: "Additional completed species needed for formal-review eligibility; this is not a power estimate.",
+      examples: pairedComparison(
+        trials.filter(
+          (trial) =>
+            definedScore(trial.pc) &&
+            propaguleType(trial) === comparison.propaguleType &&
+            (trial.treatment === comparison.baseline || trial.treatment === comparison.treatment)
+        ),
+        comparison.baseline,
+        comparison.treatment
+      ).examples
+    };
+  });
   if (comparisons.length <= 1) return comparisons;
   return comparisons.map((comparison) => ({
     ...comparison,
@@ -358,7 +369,7 @@ function experimentalUnitKey(trial: TrialRecord): string {
     trial.sourceAccession || "<missing-source>",
     trial.species.trim().toLowerCase(),
     propaguleType(trial),
-    trial.cohort?.trim().toLocaleLowerCase() || "<unknown-cohort>"
+    trial.cohort?.trim().toLowerCase() || "<unknown-cohort>"
   ].join("|||");
 }
 

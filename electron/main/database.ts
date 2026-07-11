@@ -680,18 +680,53 @@ export class SeedBankDatabase {
   private saveImportUnsafe(result: ImportResult): number {
     const sourcePath = result.batch.sourcePath ?? result.batch.filename;
     const sourceId = this.resolveImportSource(result, sourcePath);
-    const existing = this.db
+    const worksheetName = result.batch.worksheetName ?? null;
+    let existing = this.db
       .prepare(
         `SELECT id, source_id, import_format_version
          FROM import_batches
          WHERE workbook_hash = ?
+           AND COALESCE(worksheet_name, '') = COALESCE(?, '')
          ORDER BY CASE WHEN source_id = ? THEN 0 ELSE 1 END, id DESC
          LIMIT 1`
       )
-      .get(result.batch.workbookHash, sourceId) as
+      .get(result.batch.workbookHash, worksheetName, sourceId) as
         | { id: number; source_id: number | null; import_format_version: number | null }
         | undefined;
+    if (!existing && worksheetName) {
+      const legacyMatches = this.db
+        .prepare(
+          `SELECT id, source_id, import_format_version
+           FROM import_batches
+           WHERE workbook_hash = ?
+             AND worksheet_name IS NULL
+           ORDER BY CASE WHEN source_id = ? THEN 0 ELSE 1 END, id DESC`
+        )
+        .all(result.batch.workbookHash, sourceId) as Array<{
+          id: number;
+          source_id: number | null;
+          import_format_version: number | null;
+        }>;
+      if (legacyMatches.length === 1) existing = legacyMatches[0];
+    }
     const importFormatVersion = result.batch.importFormatVersion ?? 1;
+    if (!existing && worksheetName && result.batch.sourceId && importFormatVersion > 1) {
+      const parserRefreshMatches = this.db
+        .prepare(
+          `SELECT id, source_id, import_format_version
+           FROM import_batches
+           WHERE workbook_hash = ?
+             AND source_id = ?
+             AND COALESCE(import_format_version, 1) < ?
+           ORDER BY id DESC`
+        )
+        .all(result.batch.workbookHash, sourceId, importFormatVersion) as Array<{
+          id: number;
+          source_id: number | null;
+          import_format_version: number | null;
+        }>;
+      if (parserRefreshMatches.length === 1) existing = parserRefreshMatches[0];
+    }
     const replacing = Boolean(
       existing && existing.source_id === sourceId && (existing.import_format_version ?? 1) < importFormatVersion
     );

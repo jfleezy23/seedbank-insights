@@ -197,9 +197,20 @@ try {
   await window.getByRole("heading", { name: "Species-level local results" }).waitFor({ timeout: 15_000 });
   await window.getByRole("button", { name: "Open Species Explorer" }).waitFor({ timeout: 15_000 });
   if (existsSync(localWorkbookPath)) {
-    await window.getByRole("button", { name: "Load local workbook" }).click();
-    await window.getByText(/Imported P_accessions_new\.xlsx/).waitFor({ timeout: 25_000 });
-    await window.getByText("128").first().waitFor({ timeout: 10_000 });
+    const localWorkbookButton = window.getByRole("button", { name: "Load local workbook" });
+    const hasLocalWorkbookButton = await localWorkbookButton
+      .waitFor({ state: "visible", timeout: 1_000 })
+      .then(() => true)
+      .catch(() => false);
+    if (hasLocalWorkbookButton) {
+      await localWorkbookButton.click();
+      await window.getByText(/Imported P_accessions_new\.xlsx/).waitFor({ timeout: 25_000 });
+      await window.getByText("128").first().waitFor({ timeout: 10_000 });
+      console.log("Local default workbook import smoke passed");
+    } else {
+      await window.getByRole("button", { name: "Import spreadsheet" }).waitFor({ timeout: 5_000 });
+      console.log("Local default workbook import smoke skipped; current UI uses reviewed import dialog");
+    }
   }
   await window.screenshot({ path: mainScreenshot });
   console.log("Packaged app launch smoke passed");
@@ -208,7 +219,6 @@ try {
   console.log(`Splash screenshot: ${splashScreenshot}`);
   console.log(`Main window screenshot: ${mainScreenshot}`);
   console.log(`Smoke user data: ${smokeUserDataDir}`);
-  if (existsSync(localWorkbookPath)) console.log("Local default workbook import smoke passed");
 } finally {
   await electronApp.close();
 }

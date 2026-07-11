@@ -135,6 +135,18 @@ try {
   if (refreshedScope.scopeHash === scopeHashBeforeRefresh || refreshedScope.importVersions[0].importFormatVersion !== 2) {
     throw new Error("Parser refresh did not change the scope identity and version provenance");
   }
+  const alternateSheet = importResult("first.xlsx", "P-alt");
+  alternateSheet.batch.workbookHash = originalBatch.workbookHash;
+  alternateSheet.batch.sourceId = originalBatch.sourceId;
+  alternateSheet.batch.sourcePath = originalBatch.sourcePath;
+  alternateSheet.batch.worksheetName = "Alternate accessions";
+  const alternateSheetSaved = db.saveImport(alternateSheet);
+  if (alternateSheetSaved.batch?.id === 1) {
+    throw new Error("Different worksheets from the same workbook hash collapsed into one import");
+  }
+  if (db.getImportResult(alternateSheetSaved.batch?.id)?.batch.worksheetName !== "Alternate accessions") {
+    throw new Error("Alternate worksheet import did not preserve worksheet provenance");
+  }
   if (db.getDashboard(1).metrics.trials !== 2) throw new Error("First batch trial count changed");
   if (db.getDashboard(2).metrics.trials !== 2) throw new Error("Second batch trial count changed");
   const issueTitles = db.getDashboard(2).dataQualityIssues.map((issue) => issue.title);
