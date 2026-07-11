@@ -38,6 +38,86 @@ After implementation work is completed, an unpacked packaged build is required f
 
 For human-review checkpoints, build and hand off the unpacked packaged app only. Installer artifacts such as Windows NSIS setup files or macOS DMGs are release artifacts; do not build, upload, or present them as candidates until the user explicitly confirms human testing passed and asks for release packaging.
 
+## Windows Release Signing Gate
+
+Windows public releases must be signed the same way as the known-good Frame Player Windows artifacts: Microsoft Artifact Signing / Microsoft ID Verified Code Signing issued to `Jonathan Floyd`. Do not publish `NotSigned`, self-signed, or `UnknownError` Windows release assets.
+
+Required tooling and identity:
+
+- Use the Windows SDK `signtool.exe`, preferably `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe`, for verification. PowerShell `Get-AuthenticodeSignature` is useful, but `signtool verify /pa /v <file>` is the release proof.
+- Use the installed .NET `sign` tool for Microsoft Artifact Signing, not PowerShell `Set-AuthenticodeSignature` and not a local self-signed cert.
+- Azure CLI must be authenticated as the signing account owner before signing: `az account show`.
+- Artifact Signing account: `frameplayersigningjflow`.
+- Resource group: `rg-frameplayer-signing`.
+- Endpoint: `https://wus2.codesigning.azure.net/`.
+- Certificate profile: `frameplayerpublic`.
+- Expected signer chain: `Microsoft Identity Verification Root Certificate Authority 2020` -> `Microsoft ID Verified Code Signing PCA 2021` -> `Microsoft ID Verified CS AOC CA 04` -> `Jonathan Floyd`.
+
+Reference check before signing SeedBank:
+
+```powershell
+$signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
+& $signtool verify /pa /v "C:\Users\jflow\Downloads\FP\FramePlayer.Avalonia.exe"
+```
+
+The Frame Player reference should verify successfully and show issuer `Microsoft ID Verified CS AOC CA 04` and subject `Jonathan Floyd`. If this does not verify, stop and diagnose the Windows signing environment before building SeedBank release assets.
+
+Correct SeedBank Windows release sequence. Substitute the current release tag and version where the example uses `v.4` and `0.4.0`:
+
+```powershell
+# Build from the exact release tag or commit, not a dirty working tree.
+git checkout --detach v.4
+
+$env:PATH = "C:\Users\jflow\.cache\codex-runtimes\codex-primary-runtime\dependencies\node\bin;" + $env:PATH
+& "C:\Users\jflow\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd" run build
+& "C:\Users\jflow\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd" exec electron-builder --win --x64 --publish never
+
+# Sign the unpacked app binaries with Microsoft Artifact Signing.
+sign code artifact-signing `
+  "release\win-unpacked\SeedBank Insights.exe" `
+  "release\win-unpacked\resources\elevate.exe" `
+  --artifact-signing-endpoint "https://wus2.codesigning.azure.net/" `
+  --artifact-signing-account "frameplayersigningjflow" `
+  --artifact-signing-certificate-profile "frameplayerpublic" `
+  --azure-credential-type azure-cli `
+  --description "SeedBank Insights" `
+  --description-url "https://github.com/jfleezy23/seedbank-insights" `
+  --file-digest SHA256 `
+  --timestamp-url "http://timestamp.acs.microsoft.com/" `
+  --timestamp-digest SHA256 `
+  --verbosity Information
+
+# Rebuild the NSIS installer from the signed unpacked app.
+& "C:\Users\jflow\.cache\codex-runtimes\codex-primary-runtime\dependencies\bin\fallback\pnpm.cmd" exec electron-builder --win nsis --x64 --prepackaged release\win-unpacked --publish never
+
+# Sign the final setup executable with the same Microsoft Artifact Signing profile.
+sign code artifact-signing `
+  "release\SeedBank Insights Setup 0.4.0.exe" `
+  --artifact-signing-endpoint "https://wus2.codesigning.azure.net/" `
+  --artifact-signing-account "frameplayersigningjflow" `
+  --artifact-signing-certificate-profile "frameplayerpublic" `
+  --azure-credential-type azure-cli `
+  --description "SeedBank Insights" `
+  --description-url "https://github.com/jfleezy23/seedbank-insights" `
+  --file-digest SHA256 `
+  --timestamp-url "http://timestamp.acs.microsoft.com/" `
+  --timestamp-digest SHA256 `
+  --verbosity Information
+```
+
+Required verification before upload:
+
+```powershell
+$signtool = "C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe"
+& $signtool verify /pa /v "release\SeedBank Insights Setup 0.4.0.exe"
+& $signtool verify /pa /v "release\win-unpacked\SeedBank Insights.exe"
+& $signtool verify /pa /v "release\win-unpacked\resources\elevate.exe"
+```
+
+All three must report `Successfully verified`, zero errors, and signer subject `Jonathan Floyd` issued by `Microsoft ID Verified CS AOC CA 04`. Electron-builder log lines such as `signing with signtool.exe` are not proof; they can appear even when the final file is unsigned. `Get-AuthenticodeSignature` must show `Status: Valid`, not merely `NotSigned` absent or `UnknownError`.
+
+After verification, copy the final setup executable to the public asset name, regenerate the checksum from that signed file, upload with `gh release upload --clobber`, and update the release notes with the new SHA-256. Re-query `gh release view --json assets` and confirm GitHub's asset digest matches the local hash.
+
 ## Release Review Cycle
 
 Before handing a release candidate to the user, follow this order:
