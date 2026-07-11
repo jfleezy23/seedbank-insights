@@ -466,7 +466,7 @@ test("dashboard shows species-local evidence entry points and actionable workboo
   await expect(fullTreatmentLabel).toBeVisible();
   await expect(fullTreatmentLabel).toHaveCSS("white-space", "normal");
   await expect(page.getByText("80.0%")).toBeVisible();
-  await expect(page.getByText("100", { exact: true })).toBeVisible();
+  await expect(page.getByText("100%", { exact: true })).toBeVisible();
   await expect
     .poll(() =>
       page.locator(".native-chart-bar").first().evaluate((bar) => Number.parseFloat((bar as HTMLElement).style.width))

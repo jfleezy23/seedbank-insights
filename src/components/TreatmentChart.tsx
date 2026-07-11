@@ -26,11 +26,15 @@ function scoreLabel(summary: TreatmentSummary): string {
 
 export function TreatmentChart({ summaries }: TreatmentChartProps) {
   const leadingConfidence = summaries.find((summary) => summary.pcMean !== null)?.confidence ?? "Inconclusive";
-  const hasPercentScale = summaries.some(
+  const scoredSummaries = summaries.filter((summary) => summary.pcMean !== null);
+  const hasPercentScale = scoredSummaries.some(
     (summary) => summary.pcScale === "percent_0_100" || summary.pcScale === "mixed" || (summary.pcMean ?? 0) > 5
   );
-  const data = summaries
-    .filter((summary) => summary.pcMean !== null)
+  const hasOrdinalScale = scoredSummaries.some(
+    (summary) => summary.pcScale !== "percent_0_100" && (summary.pcMean ?? 0) <= 5
+  );
+  const axisEndLabel = hasPercentScale && hasOrdinalScale ? "5 class / 100%" : hasPercentScale ? "100%" : "5";
+  const data = scoredSummaries
     .map((summary) => ({
       treatment: summary.treatment,
       propaguleType: summary.propaguleType,
@@ -70,8 +74,8 @@ export function TreatmentChart({ summaries }: TreatmentChartProps) {
       </div>
       <div className="native-chart-axis" aria-hidden="true">
         <span>0</span>
-        <span>Mean PC score</span>
-        <span>{hasPercentScale ? "100" : "5"}</span>
+        <span>{hasPercentScale && hasOrdinalScale ? "Mean PC by recorded scale" : "Mean PC score"}</span>
+        <span>{axisEndLabel}</span>
       </div>
     </section>
   );
