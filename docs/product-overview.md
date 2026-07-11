@@ -6,8 +6,8 @@ SeedBank Insights is a desktop analysis workbench for seed-bank propagation spre
 
 The app helps answer:
 
-- Which treatments are performing best, and where is the evidence thin?
-- Which species have enough signal to review more deeply?
+- For this species, what did each matched treatment comparison do locally, and how complete is the evidence?
+- Which treatments are performing best across species, and where is the evidence thin?
 - Which accessions need attention in the trial queue?
 - Which workbook rows contain warnings or ambiguous data?
 - Which imported cohort or explicit combined scope is currently being analyzed?
@@ -30,6 +30,10 @@ Treatment summaries are not treated as recommendations by default. Scores are pa
 
 The app owns confidence labels in deterministic TypeScript code. AI output may summarize and explain, but it cannot promote a result from `Promising` to `Strong signal` or hide a warning.
 
+### Species-First Local Evidence
+
+Species Explorer starts with matched local treatment evidence rather than an unpaired “best treatment.” It keeps completed results distinct from active preliminary work, marks undocumented codes descriptive-only, preserves accession and workbook provenance, and keeps germination `PC` separate from liner `LPC` and 4-inch rootball `4PC` outcomes. AI research follows as context, not as the source of the local verdict.
+
 ### Raw Data Stays Local
 
 Raw source workbooks are ignored by git. Public tests use synthetic fixtures so the repository can be shared without exposing project data. Synced local files are used as transport; the app does not upload raw workbooks or require Google Drive API tokens.
@@ -43,10 +47,10 @@ The UI is meant for repeated review: dense but readable, clear navigation, visib
 - Excel import from PSU-style accession workbooks
 - Dataset Manager for local synced workbook sources, compatibility previews, immutable import versions, relinking, explicit individual scopes, and explicit combined scopes
 - deterministic header normalization with AI fallback for ambiguous headers
-- local SQLite storage with workbook sources, import versions, quarantined rows, analysis scopes, and treatment codebook entries
+- local database storage with workbook sources, import versions, quarantined rows, analysis scopes, and treatment codebook entries
 - propagule-scoped treatment parsing for documented seed and cutting codes, with unknown tokens kept descriptive-only until explicitly mapped
 - note parsing for germinated and in-production observations
-- treatment summaries, species summaries, operational paired comparisons, Advanced Analysis, trial queues, and data-quality panels
+- species-first matched local treatment effects, treatment summaries, operational paired comparisons, Advanced Analysis, trial queues, and data-quality panels
 - Advanced Analysis exports with pair-level CSV, species-level CSV, and reproducibility manifest
 - optional cached OpenAI species insight cards
 - optional Ask workflow over bounded spreadsheet context

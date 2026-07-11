@@ -17,6 +17,7 @@ This is an independent project. It is not affiliated with Frame Player, and it d
 - Keeps individual and explicitly combined analysis scopes separate; import never silently changes the active scope.
 - Quarantines populated rows with missing required analysis fields instead of silently coercing or dropping them.
 - Computes treatment, species, trial queue, paired-comparison, and data-quality views locally.
+- Leads Species Explorer with matched local treatment effects by species; completed and active evidence, undocumented codes, PC, liner, and 4-inch rootball outcomes remain distinct before optional AI context.
 - Preserves raw `PC`, `LPC`, and `4PC` values, using documented 0-5 class cells directly and normalizing exact percentage cells for cross-row analysis.
 - Separates seed, stem-cutting, and division outcomes and uses species-clustered paired inference for completed trials.
 - Provides a Glossary workspace for workbook-documented treatment acronyms, parser patterns, and local/contextual codes without treating descriptive definitions as statistical eligibility.

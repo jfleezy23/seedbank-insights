@@ -45,8 +45,10 @@ import type {
   DatasetState,
   ImportPreview,
   PropaguleType,
+  SpeciesEffectVerdict,
   SpeciesResearchResult,
   SpeciesSummary,
+  SpeciesTreatmentEffect,
   TreatmentCodebookEntry
 } from "./core/types";
 import "./App.css";
@@ -83,6 +85,7 @@ const emptyDashboard: DashboardData = {
   },
   treatmentSummaries: [],
   speciesSummaries: [],
+  speciesTreatmentEffects: [],
   pairedComparisons: [],
   trialQueue: [],
   dataQualityIssues: [],
@@ -110,28 +113,81 @@ function AiStatusPill({ dashboard }: { dashboard: DashboardData }) {
   );
 }
 
-function deterministicSpeciesRead(summary: SpeciesSummary | undefined): string {
-  if (!summary) return "Select a species to inspect its propagation evidence.";
-  const treatment = summary.bestTreatment ?? "No treatment has enough PC data yet";
-  const mean = summary.bestPcMean === null ? "" : ` with mean PC ${summary.bestPcMean.toFixed(1)}`;
-  if (summary.confidence === "Needs replication") {
-    return `${summary.species} has ${summary.rows} row${summary.rows === 1 ? "" : "s"} across ${summary.treatments} treatment${summary.treatments === 1 ? "" : "s"}. ${treatment}${mean}; keep this as a hypothesis until more accessions repeat it.`;
+function speciesVerdictLabel(verdict: SpeciesEffectVerdict): string {
+  switch (verdict) {
+    case "one_observed_result":
+      return "One observed result";
+    case "early_local_pattern":
+      return "Early local pattern";
+    case "consistent_local_lift":
+      return "Consistent local lift";
+    case "consistent_lower_response":
+      return "Consistent lower response";
+    case "descriptive_only":
+      return "Descriptive only";
+    case "mixed_local_response":
+      return "Mixed local response";
   }
-  if (summary.confidence === "Inconclusive") {
-    return `${summary.species} has some treatment coverage, but PC or follow-up observations are too thin for a directional call. ${treatment}${mean}.`;
-  }
-  return `${summary.species} is worth closer attention: ${treatment}${mean} is the current local leader, with ${summary.pcCount} PC score${summary.pcCount === 1 ? "" : "s"} available.`;
 }
 
-function deterministicTrialDesign(summary: SpeciesSummary | undefined): string {
-  if (!summary) return "Import data to build a species-specific trial plan.";
-  if (summary.accessions < 3 || summary.treatments < 2) {
-    return "Add paired control and candidate-treatment trays across at least three accessions before recommending a protocol.";
+function speciesVerdictDescription(effect: SpeciesTreatmentEffect): string {
+  switch (effect.verdict) {
+    case "one_observed_result":
+      return "One matched accession recorded this result. Repeat it before treating it as a protocol recommendation.";
+    case "early_local_pattern":
+      return "Two matched accessions point in the same direction, but the local pattern still needs repetition.";
+    case "consistent_local_lift":
+      return effect.controlTreatment
+        ? `${effect.treatmentA} repeatedly recorded a higher propagation response than the matched control.`
+        : `${effect.treatmentA} repeatedly recorded a higher propagation response than ${effect.treatmentB}.`;
+    case "consistent_lower_response":
+      return effect.controlTreatment
+        ? `${effect.treatmentA} repeatedly recorded a lower propagation response than the matched control.`
+        : `${effect.treatmentA} repeatedly recorded a lower propagation response than ${effect.treatmentB}.`;
+    case "descriptive_only":
+      return "The matched workbook result is retained, but an undocumented treatment code prevents a protocol claim.";
+    case "mixed_local_response":
+      return "Matched accessions did not show a clear directional difference. Keep both treatments in the next trial.";
   }
-  if (summary.pcCount < summary.rows) {
-    return "Prioritize missing PC and production follow-up before adding more treatment variants.";
-  }
-  return "Repeat the current best treatment against control and the nearest alternative, then track liner and 4-inch survival.";
+}
+
+function speciesVerdictClass(verdict: SpeciesEffectVerdict): string {
+  return `species-effect-verdict ${verdict.replace(/_/g, "-")}`;
+}
+
+function displayTreatment(treatment: string, propaguleType: PropaguleType, codebook: TreatmentCodebookEntry[]): string {
+  const parsed = parseTreatment(treatment, propaguleType, codebook);
+  if (!parsed.tokens.length) return treatment;
+  const labels = parsed.tokens.map((token) => {
+    const entry = findTreatmentGlossaryEntry(token, propaguleType, codebook);
+    const safeToExpand = entry?.status === "Workbook documented" || entry?.status === "Active codebook" || entry?.status === "Parser pattern";
+    return safeToExpand ? entry.label : token;
+  });
+  const expanded = labels.join(" + ");
+  return expanded === treatment ? treatment : `${expanded} (${treatment})`;
+}
+
+function propagationDifference(effect: SpeciesTreatmentEffect): string {
+  const value = effect.scorePresentation === "percentage_points" && effect.exactPercentageDelta !== null
+    ? effect.exactPercentageDelta
+    : effect.meanDiff;
+  const unit = effect.scorePresentation === "percentage_points" && effect.exactPercentageDelta !== null
+    ? "percentage points"
+    : "PC classes";
+  const sign = value > 0 ? "+" : "";
+  return `${sign}${value.toFixed(1)} ${unit}`;
+}
+
+function effectComparisonLabel(effect: SpeciesTreatmentEffect, codebook: TreatmentCodebookEntry[]): string {
+  return `${displayTreatment(effect.treatmentA, effect.propaguleType, codebook)} vs ${displayTreatment(
+    effect.treatmentB,
+    effect.propaguleType,
+    codebook
+  )}`;
+}
+
+function followUpLabel(endpoint: "lpc" | "four_pc"): string {
+  return endpoint === "lpc" ? "Liner rootball quality (LPC)" : "4-inch rootball quality (4PC)";
 }
 
 function researchScopeIdentity(dashboard: DashboardData): string {
@@ -179,22 +235,253 @@ function evidenceLevelText(level: SpeciesResearchResult["recommendedTechniques"]
   }
 }
 
+function speciesEffectRank(effect: SpeciesTreatmentEffect): number {
+  switch (effect.verdict) {
+    case "consistent_local_lift":
+      return 6;
+    case "consistent_lower_response":
+      return 5;
+    case "early_local_pattern":
+      return 4;
+    case "one_observed_result":
+      return 3;
+    case "mixed_local_response":
+      return 2;
+    case "descriptive_only":
+      return 1;
+  }
+}
+
+function orderedSpeciesEffects(effects: SpeciesTreatmentEffect[]): SpeciesTreatmentEffect[] {
+  return [...effects].sort(
+    (left, right) =>
+      speciesEffectRank(right) - speciesEffectRank(left) ||
+      right.pairCount - left.pairCount ||
+      Math.abs(right.meanDiff) - Math.abs(left.meanDiff) ||
+      left.treatmentA.localeCompare(right.treatmentA) ||
+      left.treatmentB.localeCompare(right.treatmentB)
+  );
+}
+
+function SpeciesEffectCard({
+  effect,
+  codebook
+}: {
+  effect: SpeciesTreatmentEffect;
+  codebook: TreatmentCodebookEntry[];
+}) {
+  const comparison = effectComparisonLabel(effect, codebook);
+  const comparisonId = `species-effect-${effect.id.replace(/[^a-z0-9_-]/gi, "-")}`;
+  return (
+    <article className="species-effect-card">
+      <div className="species-effect-heading">
+        <div>
+          <span className="species-effect-propagule">{propaguleDisplay(effect.propaguleType)}</span>
+          <h5 id={comparisonId}>{comparison}</h5>
+          <p>{effect.outcome === "active" ? "In-progress matched trials — preliminary." : "Completed matched trials."}</p>
+        </div>
+        <span className={speciesVerdictClass(effect.verdict)}>{speciesVerdictLabel(effect.verdict)}</span>
+      </div>
+
+      <div className="species-effect-result" aria-labelledby={comparisonId}>
+        <strong>{propagationDifference(effect)}</strong>
+        <span>{speciesVerdictDescription(effect)}</span>
+      </div>
+
+      <dl className="species-effect-metrics">
+        <div><dt>Matched accessions</dt><dd>{effect.accessionCount}</dd></div>
+        <div><dt>Source lots</dt><dd>{effect.sourceAccessionCount}</dd></div>
+        <div><dt>{effect.treatmentA} higher</dt><dd>{effect.higherCount}</dd></div>
+        <div><dt>Tied</dt><dd>{effect.tiedCount}</dd></div>
+        <div><dt>{effect.treatmentB} higher</dt><dd>{effect.lowerCount}</dd></div>
+      </dl>
+
+      {effect.followUps.length ? (
+        <section className="species-follow-up" aria-label="After propagation outcomes">
+          <strong>After propagation</strong>
+          <div>
+            {effect.followUps.map((followUp) => (
+              <span key={followUp.endpoint}>
+                {followUpLabel(followUp.endpoint)}: {followUp.treatmentAMean.toFixed(1)} vs {followUp.treatmentBMean.toFixed(1)}
+                {followUp.meanDifference > 0 ? " (+" : " ("}{followUp.meanDifference.toFixed(1)}) · n={followUp.pairCount}
+              </span>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
+      <details className="species-effect-evidence">
+        <summary>View matched workbook evidence ({effect.evidence.length})</summary>
+        <div className="table-scroll">
+          <table>
+            <thead>
+              <tr>
+                <th scope="col">Propagation accession</th>
+                <th scope="col">Source lot</th>
+                <th scope="col">Cohort</th>
+                <th scope="col">{effect.treatmentA}</th>
+                <th scope="col">{effect.treatmentB}</th>
+                <th scope="col">Recorded</th>
+                <th scope="col">Workbook row</th>
+              </tr>
+            </thead>
+            <tbody>
+              {effect.evidence.map((pair) => (
+                <tr key={`${effect.id}-${pair.pAccession}-${pair.sourceRows.join("-")}`}>
+                  <td>{pair.pAccession}</td>
+                  <td>{pair.sourceAccession || "Not recorded"}</td>
+                  <td>{pair.cohort}</td>
+                  <td>{pair.scoreA}</td>
+                  <td>{pair.scoreB}</td>
+                  <td>{pair.recordedAt ?? "Not recorded"}</td>
+                  <td>
+                    {pair.sourceFilename ? `${pair.sourceFilename} · ` : ""}
+                    {pair.worksheet ? `${pair.worksheet} · ` : ""}row {pair.sourceRows.join(", ")}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </details>
+    </article>
+  );
+}
+
+function SpeciesLocalResults({
+  summary,
+  effects,
+  codebook
+}: {
+  summary: SpeciesSummary | undefined;
+  effects: SpeciesTreatmentEffect[];
+  codebook: TreatmentCodebookEntry[];
+}) {
+  const completed = orderedSpeciesEffects(effects.filter((effect) => effect.outcome === "completed"));
+  const active = orderedSpeciesEffects(effects.filter((effect) => effect.outcome === "active"));
+  const renderOutcome = (heading: string, description: string, rows: SpeciesTreatmentEffect[], state: "completed" | "active") => (
+    <section className={`species-results-outcome ${state}`} key={state}>
+      <div className="species-results-outcome-heading">
+        <div>
+          <h4>{heading}</h4>
+          <p>{description}</p>
+        </div>
+        <span>{rows.length} contrast{rows.length === 1 ? "" : "s"}</span>
+      </div>
+      {rows.length ? (
+        <div className="species-effects-by-propagule">
+          {(["seed", "stem_cutting", "division"] as const).map((propagule) => {
+            const group = rows.filter((effect) => effect.propaguleType === propagule);
+            if (!group.length) return null;
+            return (
+              <section className="species-propagule-group" key={propagule}>
+                <h5>{propaguleDisplay(propagule)}</h5>
+                <div className="species-effect-list">
+                  {group.map((effect) => <SpeciesEffectCard effect={effect} codebook={codebook} key={effect.id} />)}
+                </div>
+              </section>
+            );
+          })}
+        </div>
+      ) : state === "completed" ? (
+        <div className="species-local-empty" role="status">
+          <strong>No matched treatment comparison recorded for this species.</strong>
+          <span>Observed treatment rows are not ranked because they are not a like-for-like accession comparison.</span>
+        </div>
+      ) : (
+        <p className="species-outcome-empty">No in-progress matched treatment results are available.</p>
+      )}
+    </section>
+  );
+
+  return (
+    <section className="species-local-results" aria-labelledby="local-propagation-results">
+      <div className="species-local-results-heading">
+        <div>
+          <span>Workbook evidence first</span>
+          <h4 id="local-propagation-results">Local propagation results</h4>
+          <p>Compare treatments within the same accession and source lot before using research context or raw averages.</p>
+        </div>
+        <div className="species-metrics" aria-label="Local evidence counts">
+          <span>{summary?.rows ?? 0} rows</span>
+          <span>{summary?.accessions ?? 0} accessions</span>
+          <span>{summary?.pcCount ?? 0} PC records</span>
+        </div>
+      </div>
+      {renderOutcome("Completed matched trials", "These are the primary local results.", completed, "completed")}
+      {renderOutcome("In-progress matched trials", "Useful early evidence; completion can still change the result.", active, "active")}
+      {(summary?.unpairedScoredTreatmentCount ?? 0) > 0 ? (
+        <p className="species-unpaired-note">
+          {summary?.unpairedScoredTreatmentCount} treatment record{summary?.unpairedScoredTreatmentCount === 1 ? " is" : "s are"} scored but not part of a matched comparison.
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
+function SpeciesResultsOverview({
+  effects,
+  codebook,
+  onOpenSpecies
+}: {
+  effects: SpeciesTreatmentEffect[];
+  codebook: TreatmentCodebookEntry[];
+  onOpenSpecies: (species: string) => void;
+}) {
+  const visible = orderedSpeciesEffects(effects.filter((effect) => effect.outcome === "completed")).slice(0, 6);
+  return (
+    <section className="panel species-results-overview">
+      <div className="panel-heading">
+        <div>
+          <h2>Species-level local results</h2>
+          <p>Completed, matched workbook comparisons. Open a species to review the full local evidence.</p>
+        </div>
+        <span>{effects.filter((effect) => effect.outcome === "completed").length} results</span>
+      </div>
+      {visible.length ? (
+        <div className="species-results-overview-list">
+          {visible.map((effect) => (
+            <button type="button" key={effect.id} onClick={() => onOpenSpecies(effect.species)}>
+              <span>
+                <strong>{effect.species}</strong>
+                <small>{effectComparisonLabel(effect, codebook)}</small>
+              </span>
+              <span>
+                <b>{propagationDifference(effect)}</b>
+                <small>{effect.pairCount} matched accession{effect.pairCount === 1 ? "" : "s"} · {speciesVerdictLabel(effect.verdict)}</small>
+              </span>
+            </button>
+          ))}
+        </div>
+      ) : (
+        <p className="species-results-overview-empty">No completed matched treatment comparisons are available in this scope yet.</p>
+      )}
+    </section>
+  );
+}
+
 function SpeciesExplorer({
   dashboard,
   aiConfigured,
   actionDisabled,
+  codebook,
+  focusedSpecies,
   researchResults,
   researchErrors,
   researchingSpecies,
-  onResearchSpecies
+  onResearchSpecies,
+  onFocusSpecies
 }: {
   dashboard: DashboardData;
   aiConfigured: boolean;
   actionDisabled: boolean;
+  codebook: TreatmentCodebookEntry[];
+  focusedSpecies: { scopeIdentity: string; species: string } | null;
   researchResults: Record<string, SpeciesResearchResult>;
   researchErrors: Record<string, string>;
   researchingSpecies: string | null;
   onResearchSpecies: (species: string, force?: boolean) => void;
+  onFocusSpecies: (species: string) => void;
 }) {
   const hasBatch = Boolean(dashboard.batch);
   const speciesOptions = useMemo(() => {
@@ -221,7 +508,7 @@ function SpeciesExplorer({
     return speciesOptions.filter((option) => option.species.toLocaleLowerCase().includes(query));
   }, [speciesFilter, speciesOptions]);
   const emptyTitle = !hasBatch
-    ? "Import a workbook before researching species."
+    ? "Import a workbook to browse local propagation evidence."
     : !aiConfigured
       ? "Load cached AI research or add an OpenAI key to generate it."
       : "Select a species to run AI protocol research.";
@@ -235,16 +522,28 @@ function SpeciesExplorer({
       }
       return;
     }
+    const requestedSpecies =
+      focusedSpecies?.scopeIdentity === scopeIdentity && speciesOptions.some((option) => option.species === focusedSpecies.species)
+      ? focusedSpecies.species
+      : null;
+    if (requestedSpecies && requestedSpecies !== selectedSpecies) {
+      setSelectedSpecies(requestedSpecies);
+      return;
+    }
     if (scopeChanged || !speciesOptions.some((option) => option.species === selectedSpecies)) {
       // The selected species belongs to the preceding scope; replace it with
       // the first valid option after the asynchronous scope/data refresh.
       setSelectedSpecies(firstSpecies);
     }
-  }, [firstSpecies, scopeIdentity, selectedSpecies, speciesOptions]);
+  }, [firstSpecies, focusedSpecies, scopeIdentity, selectedSpecies, speciesOptions]);
 
   const selectedSummary =
     dashboard.speciesSummaries.find((summary) => summary.species === selectedSpecies) ?? speciesOptions[0]?.summary;
   const activeSpecies = selectedSummary?.species ?? selectedSpecies;
+  const selectedEffects = useMemo(
+    () => (dashboard.speciesTreatmentEffects ?? []).filter((effect) => effect.species === activeSpecies),
+    [activeSpecies, dashboard.speciesTreatmentEffects]
+  );
   const selectedLinks = activeSpecies ? buildSpeciesResourceLinks(activeSpecies) : [];
   const cacheMissingSpecies = useMemo(
     () => new Set(dashboard.speciesResearchCacheStatus?.missingSpecies ?? []),
@@ -285,8 +584,8 @@ function SpeciesExplorer({
       <section className="panel species-workbench-panel">
         <div className="panel-heading">
           <div>
-            <h2>AI Research Assessment</h2>
-            <p>{dashboard.aiInsightStatus.message}</p>
+            <h2>Species Explorer</h2>
+            <p>Matched local workbook evidence comes first. AI research adds context below it.</p>
           </div>
           <div className="species-actions">
             <AiStatusPill dashboard={dashboard} />
@@ -331,7 +630,10 @@ function SpeciesExplorer({
                     aria-pressed={option.species === activeSpecies}
                     className={option.species === activeSpecies ? "active" : ""}
                     key={option.species}
-                    onClick={() => setSelectedSpecies(option.species)}
+                    onClick={() => {
+                      setSelectedSpecies(option.species);
+                      onFocusSpecies(option.species);
+                    }}
                   >
                     <span>{option.species}</span>
                     <small>
@@ -358,6 +660,8 @@ function SpeciesExplorer({
                   <span>{familyStatusText(selectedResearch)}</span>
                 </div>
               </div>
+
+              <SpeciesLocalResults summary={selectedSummary} effects={selectedEffects} codebook={codebook} />
 
               {isResearching ? (
                 <section className="species-research-state">
@@ -556,28 +860,6 @@ function SpeciesExplorer({
                 </section>
               ) : null}
 
-              <details className="local-evidence-details">
-                <summary>Local workbook evidence and deterministic guardrails</summary>
-                <div className="species-metrics">
-                  <span>{selectedSummary?.rows ?? 0} rows</span>
-                  <span>{selectedSummary?.accessions ?? 0} accessions</span>
-                  <span>{selectedSummary?.treatments ?? 0} treatments</span>
-                  <span>{selectedSummary?.pcCount ?? 0} PC scores</span>
-                  <span>{selectedSummary?.bestTreatment ?? "No leader"}</span>
-                  <span>{selectedSummary?.confidence ?? "No local label"}</span>
-                </div>
-                <div className="local-evidence-copy">
-                  <p>{deterministicSpeciesRead(selectedSummary)}</p>
-                  <p>{deterministicTrialDesign(selectedSummary)}</p>
-                </div>
-                <div className="evidence-list">
-                  {(selectedResearch?.localEvidence ?? []).slice(0, 5).map((evidence) => (
-                    <span key={`${activeSpecies}-${evidence.sourceRow}-${evidence.treatment}`}>
-                      Row {evidence.sourceRow}: {evidence.treatment} - {evidence.observation}
-                    </span>
-                  ))}
-                </div>
-              </details>
             </article>
           </div>
         ) : (
@@ -881,7 +1163,7 @@ function HelpPanel() {
         <div className="help-steps">
           <span>1. Import a PSU-style workbook or load the local workbook.</span>
           <span>2. Use Insight Board for status and where-to-go-next routing.</span>
-          <span>3. Use Species Explorer for AI-backed germination research on a selected taxon.</span>
+          <span>3. Use Species Explorer for matched local treatment evidence by species, with AI context below it.</span>
           <span>4. Use Data Quality and Trial Queue to fix workbook rows before making protocol decisions.</span>
         </div>
       </section>
@@ -1353,7 +1635,15 @@ function App() {
   const [researchingSpecies, setResearchingSpecies] = useState<string | null>(null);
   const researchingSpeciesRef = useRef<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
+  const [focusedSpecies, setFocusedSpecies] = useState<{ scopeIdentity: string; species: string } | null>(null);
   const closeSettings = useCallback(() => setSettingsOpen(false), []);
+  const openSpeciesExplorer = useCallback((species: string) => {
+    setFocusedSpecies({ scopeIdentity: researchScopeIdentity(dashboard), species });
+    setSelectedNav("Species Explorer");
+  }, [dashboard]);
+  const focusCurrentSpecies = useCallback((species: string) => {
+    setFocusedSpecies({ scopeIdentity: researchScopeIdentity(dashboard), species });
+  }, [dashboard]);
   const confirmOpenAiRequest = useCallback(
     (action: string) =>
       new Promise<boolean>((resolve) => {
@@ -1453,24 +1743,6 @@ function App() {
     dashboard.scope?.requiresReprocessing
   ]);
   const operationalMessage = message && message !== USER_CANCELLED_REQUEST_MESSAGE ? message : null;
-  const researchCacheStatus = dashboard.speciesResearchCacheStatus;
-  const activeScopeResearchIdentity = researchScopeIdentity(dashboard);
-  const activeSessionResearchCount = Object.keys(speciesResearchResults).filter((key) =>
-    key.startsWith(`${activeScopeResearchIdentity}:`)
-  ).length;
-  const researchedSpeciesCount = researchCacheStatus?.researchedSpecies ?? activeSessionResearchCount;
-  const researchSpeciesTotal = researchCacheStatus?.totalSpecies ?? dashboard.metrics.species;
-  const researchCoverageTitle = dashboard.batch
-    ? `${researchedSpeciesCount} / ${researchSpeciesTotal} researched species`
-    : "Research workbench ready";
-  const researchCoverageDetail =
-    researchCacheStatus && researchCacheStatus.totalSpecies > 0
-      ? researchCacheStatus.missingSpecies.length
-        ? `${researchCacheStatus.missingSpecies.slice(0, 3).join(", ")}${
-            researchCacheStatus.missingSpecies.length > 3 ? ` +${researchCacheStatus.missingSpecies.length - 3}` : ""
-          } still need cached research.`
-        : "All imported species have cached AI research for the demo."
-      : "Run species-level AI research with local row evidence, family context, caveats, and next-trial design.";
   const metricCards = useMemo(
     () => [
       {
@@ -1841,9 +2113,9 @@ function App() {
       </article>
 
       <article className="overview-card">
-        <span>Species assessment</span>
-        <strong>{researchCoverageTitle}</strong>
-        <p>{researchCoverageDetail}</p>
+        <span>Species-local evidence</span>
+        <strong>{(dashboard.speciesTreatmentEffects ?? []).filter((effect) => effect.outcome === "completed").length} matched results</strong>
+        <p>Start with the completed, accession-matched treatment result for the species in front of you.</p>
         <button type="button" onClick={() => setSelectedNav("Species Explorer")}>
           Open Species Explorer
         </button>
@@ -1950,6 +2222,11 @@ function App() {
           <>
             {hero}
             {metrics}
+            <SpeciesResultsOverview
+              effects={dashboard.speciesTreatmentEffects ?? []}
+              codebook={codebook}
+              onOpenSpecies={openSpeciesExplorer}
+            />
             {overview}
           </>
         )}
@@ -1959,10 +2236,13 @@ function App() {
             dashboard={dashboard}
             aiConfigured={aiConfigured}
             actionDisabled={busy}
+            codebook={codebook}
+            focusedSpecies={focusedSpecies}
             researchResults={speciesResearchResults}
             researchErrors={speciesResearchErrors}
             researchingSpecies={researchingSpecies}
             onResearchSpecies={researchSpecies}
+            onFocusSpecies={focusCurrentSpecies}
           />
         )}
 

@@ -77,6 +77,14 @@ Seed, stem-cutting, and division `PC` outcomes must not be pooled because their 
 
 Unknown treatment tokens remain descriptive-only until a propagule-specific codebook entry documents their meaning. No treatment meaning should be inferred from an undocumented local token.
 
+## Species-First Local Results
+
+Species Explorer treats a species-treatment effect as a matched local comparison, not the highest unpaired treatment average. Each result remains within its workbook/import version, cohort, propagation accession, source accession when available, species, and propagule type. A recorded `C` may be described as the control; when neither arm is `C`, the app must present the two treatments symmetrically.
+
+Completed (`D`) effects are primary. Active (`ND`) effects are preliminary and cannot be represented as completed evidence. Deterministic results include the treatment pair, propagule type, pair counts, direction, effect, interval when available, verdict, descriptive-only state, conditions, and source-row provenance. They are local workbook evidence, not proof of an external or universally transferable protocol.
+
+`PC` remains the germination/propagation outcome. `LPC` and `4PC` are separate after-propagation endpoints; they may be shown alongside a matched PC effect when recorded but never change its germination verdict or become a composite score.
+
 ## AI Species Insights
 
 AI species insight output must:
@@ -87,6 +95,8 @@ AI species insight output must:
 - avoid broad protocol recommendations from thin data
 - fail closed if output is malformed
 - use only source URLs returned by the OpenAI web-search discovery call
+- treat supplied deterministic species-treatment effects as authoritative local evidence
+- keep completed and active effects distinct, and keep `PC`, `LPC`, and `4PC` distinct
 
 AI species insight output must not:
 
@@ -96,6 +106,8 @@ AI species insight output must not:
 - invent source rows
 - cite rows outside the bounded context
 - invent or substitute research URLs
+- upgrade, reinterpret, or contradict a deterministic local treatment-effect verdict
+- treat local workbook evidence as external proof or a universal propagation protocol
 
 Species research uses `gpt-5.4-mini` with low reasoning for bounded web discovery and `gpt-5.4` for structured synthesis. A `gpt-5.5` retry is reserved for malformed synthesis output, not the normal path. Ask and ambiguous-header mapping use `gpt-5.4-mini`.
 

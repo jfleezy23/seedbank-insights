@@ -194,7 +194,7 @@ try {
   await window.getByRole("heading", { name: "Insight Board" }).waitFor({ timeout: 15_000 });
   await window.getByRole("img", { name: "Portland State University" }).waitFor({ timeout: 15_000 });
   await window.getByText("Best analyzed paired comparison").waitFor({ timeout: 15_000 });
-  await window.getByText("Species assessment").waitFor({ timeout: 15_000 });
+  await window.getByRole("heading", { name: "Species-level local results" }).waitFor({ timeout: 15_000 });
   await window.getByRole("button", { name: "Open Species Explorer" }).waitFor({ timeout: 15_000 });
   if (existsSync(localWorkbookPath)) {
     await window.getByRole("button", { name: "Load local workbook" }).click();

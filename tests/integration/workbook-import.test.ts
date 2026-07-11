@@ -5,7 +5,7 @@ import path from "node:path";
 import ExcelJS from "exceljs";
 import { describe, expect, it } from "vitest";
 import { importWorkbook } from "../../src/core/workbook";
-import { buildAdvancedComparisons, pairedComparison } from "../../src/core/statistics";
+import { buildAdvancedComparisons, buildSpeciesTreatmentEffects, pairedComparison } from "../../src/core/statistics";
 
 const workbookPath = process.env.WORKBOOK_IMPORT_TEST_PATH ?? path.join(process.cwd(), "P_accessions_new.xlsx");
 const readyWorkbookPath = process.env.READY_WORKBOOK_IMPORT_TEST_PATH;
@@ -140,6 +140,10 @@ describe.runIf(existsSync(workbookPath))("P_accessions_new.xlsx import", () => {
     expect(comparison.tied).toBe(11);
     expect(comparison.worse).toBe(3);
     expect(comparison.meanDiff).toBeCloseTo(1.68, 1);
+
+    const effects = buildSpeciesTreatmentEffects(result.trials);
+    expect(effects.some((effect) => effect.outcome === "completed")).toBe(true);
+    expect(effects.some((effect) => effect.outcome === "active")).toBe(true);
   });
 });
 
@@ -152,5 +156,6 @@ describe.runIf(Boolean(readyWorkbookPath) && existsSync(readyWorkbookPath!))("P_
     expect(result.trials.some((trial) => trial.status === "D")).toBe(true);
     expect(result.trials.some((trial) => Boolean(trial.sourceAccession))).toBe(true);
     expect(buildAdvancedComparisons(result.trials)).not.toHaveLength(0);
+    expect(buildSpeciesTreatmentEffects(result.trials).some((effect) => effect.outcome === "completed")).toBe(true);
   });
 });

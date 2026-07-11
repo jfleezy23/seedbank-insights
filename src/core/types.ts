@@ -362,9 +362,68 @@ export interface SpeciesSummary {
   accessions: number;
   treatments: number;
   pcCount: number;
-  bestTreatment: string | null;
-  bestPcMean: number | null;
-  confidence: ConfidenceLabel;
+  completedContrastCount: number;
+  activeContrastCount: number;
+  unpairedScoredTreatmentCount: number;
+}
+
+export type SpeciesEffectOutcome = "completed" | "active";
+
+export type SpeciesEffectVerdict =
+  | "one_observed_result"
+  | "early_local_pattern"
+  | "consistent_local_lift"
+  | "consistent_lower_response"
+  | "mixed_local_response"
+  | "descriptive_only";
+
+export interface SpeciesTreatmentPairEvidence {
+  pAccession: string;
+  sourceAccession: string;
+  cohort: string;
+  scoreA: number;
+  scoreB: number;
+  diff: number;
+  sourceFilename: string;
+  worksheet: string;
+  workbookHash: string;
+  sourceRows: number[];
+  /** Latest paired trial-termination date across the treatment arms. */
+  recordedAt: string | null;
+}
+
+export interface SpeciesFollowUpEffect {
+  endpoint: "lpc" | "four_pc";
+  pairCount: number;
+  treatmentAMean: number;
+  treatmentBMean: number;
+  meanDifference: number;
+}
+
+export interface SpeciesTreatmentEffect {
+  id: string;
+  species: string;
+  propaguleType: PropaguleType;
+  outcome: SpeciesEffectOutcome;
+  treatmentA: string;
+  treatmentB: string;
+  controlTreatment: string | null;
+  pairCount: number;
+  accessionCount: number;
+  sourceAccessionCount: number;
+  higherCount: number;
+  tiedCount: number;
+  lowerCount: number;
+  meanDiff: number;
+  medianDiff: number;
+  ciLow: number;
+  ciHigh: number;
+  verdict: SpeciesEffectVerdict;
+  descriptiveOnly: boolean;
+  scorePresentation: "pc_class" | "percentage_points";
+  exactPercentageDelta: number | null;
+  evidence: SpeciesTreatmentPairEvidence[];
+  followUps: SpeciesFollowUpEffect[];
 }
 
 export interface PairedComparison {
@@ -501,6 +560,7 @@ export interface DashboardData {
   };
   treatmentSummaries: TreatmentSummary[];
   speciesSummaries: SpeciesSummary[];
+  speciesTreatmentEffects: SpeciesTreatmentEffect[];
   pairedComparisons: PairedComparison[];
   advancedComparisons?: AdvancedComparison[];
   trialQueue: TrialQueueItem[];

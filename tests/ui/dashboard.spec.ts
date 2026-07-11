@@ -4,7 +4,7 @@ test("dashboard renders primary insight surfaces in browser fallback", async ({ 
   await page.goto("/");
   await expect(page.getByRole("heading", { name: "Insight Board" })).toBeVisible();
   await expect(page.getByText("Best analyzed paired comparison")).toBeVisible();
-  await expect(page.getByText("Species assessment")).toBeVisible();
+  await expect(page.getByText("Species-local evidence")).toBeVisible();
   await expect(page.getByText("Quality checks")).toBeVisible();
   await expect(page.getByText("Operational follow-up")).toBeVisible();
   await expect(page.getByText("Evidence guardrails")).toHaveCount(0);
@@ -178,7 +178,7 @@ test("Advanced Analysis explains when a legacy parser omitted completed outcomes
   await expect(page.getByRole("heading", { name: "Dataset Manager" })).toBeVisible();
 });
 
-test("dashboard shows cache-backed research coverage and actionable workbook queues", async ({ page }) => {
+test("dashboard shows species-local evidence entry points and actionable workbook queues", async ({ page }) => {
   await page.addInitScript(() => {
     const dashboard = {
       batch: {
@@ -426,8 +426,8 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
 
   await page.goto("/");
   await expect(page.getByText(/SQLite/i)).toHaveCount(0);
-  await expect(page.getByText("3 / 3 researched species")).toBeVisible();
-  await expect(page.getByText("All imported species have cached AI research for the demo.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Species-level local results" })).toBeVisible();
+  await expect(page.getByText("No completed matched treatment comparisons are available in this scope yet.")).toBeVisible();
 
   await page.getByRole("button", { name: "Open Data Quality" }).click();
   await expect(page.getByText("Rows 12")).toBeVisible();
@@ -560,7 +560,7 @@ test("overview cards navigate to dedicated workspaces", async ({ page }) => {
 
   await page.getByRole("button", { name: "Insight Board", exact: true }).click();
   await page.getByRole("button", { name: "Open Species Explorer" }).click();
-  await expect(page.getByRole("heading", { name: "AI Research Assessment" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Species Explorer" }).last()).toBeVisible();
 
   await page.getByRole("button", { name: "Insight Board", exact: true }).click();
   await page.getByRole("button", { name: "Open Data Quality" }).click();
@@ -585,8 +585,8 @@ test("sidebar navigation renders distinct workspaces and settings state", async 
     "page"
   );
   await expect(page.getByRole("button", { name: "Insight Board", exact: true })).not.toHaveAttribute("aria-current");
-  await expect(page.getByRole("heading", { name: "AI Research Assessment" })).toBeVisible();
-  await expect(page.getByText("Import a workbook before researching species.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Species Explorer" }).last()).toBeVisible();
+  await expect(page.getByText("Import a workbook to browse local propagation evidence.")).toBeVisible();
 
   await page.getByRole("button", { name: "Treatment Comparator", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Treatment score overview" })).toBeVisible();
@@ -794,7 +794,7 @@ test("species explorer researches a species with workbook-backed AI assessment",
   await expect(page.getByText("Sources cited in this assessment; workbook rows own deterministic evidence tiers.")).toBeVisible();
   await expect(page.getByRole("link", { name: /GBIF species search/ })).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Refresh research" })).toBeVisible();
-  await expect(page.getByText("Local workbook evidence and deterministic guardrails")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Local propagation results" })).toBeVisible();
   const assessmentCard = page.locator(".ai-assessment-card");
   const supportGrid = page.locator(".species-support-grid");
   await expect(assessmentCard).toBeVisible();
@@ -1292,4 +1292,82 @@ test("clearing a key refreshes species explorer AI controls", async ({ page }) =
   await page.getByRole("button", { name: "Close settings" }).click();
 
   await expect(page.getByRole("button", { name: "Load cached research" })).toBeDisabled();
+});
+
+test("Species Explorer leads with matched local treatment evidence and the Insight Board opens that species", async ({ page }) => {
+  await page.addInitScript(() => {
+    const effect = {
+      id: "species-effect:seed:completed:lomatium-testii:CS:C",
+      species: "Lomatium testii",
+      propaguleType: "seed",
+      outcome: "completed",
+      treatmentA: "CS",
+      treatmentB: "C",
+      controlTreatment: "C",
+      pairCount: 3,
+      accessionCount: 3,
+      sourceAccessionCount: 2,
+      higherCount: 3,
+      tiedCount: 0,
+      lowerCount: 0,
+      meanDiff: 2,
+      medianDiff: 2,
+      ciLow: 1,
+      ciHigh: 3,
+      verdict: "consistent_local_lift",
+      descriptiveOnly: false,
+      scorePresentation: "pc_class",
+      exactPercentageDelta: null,
+      evidence: [
+        { pAccession: "P1", sourceAccession: "SRC-1", cohort: "2024", scoreA: 4, scoreB: 2, diff: 2, sourceFilename: "fixture.xlsx", worksheet: "P_accessions", workbookHash: "fixture-hash", sourceRows: [12, 13], recordedAt: "2024-04-01" },
+        { pAccession: "P2", sourceAccession: "SRC-1", cohort: "2024", scoreA: 5, scoreB: 3, diff: 2, sourceFilename: "fixture.xlsx", worksheet: "P_accessions", workbookHash: "fixture-hash", sourceRows: [14, 15], recordedAt: "2024-04-02" },
+        { pAccession: "P3", sourceAccession: "SRC-2", cohort: "2024", scoreA: 4, scoreB: 2, diff: 2, sourceFilename: "fixture.xlsx", worksheet: "P_accessions", workbookHash: "fixture-hash", sourceRows: [16, 17], recordedAt: "2024-04-03" }
+      ],
+      followUps: [{ endpoint: "lpc", pairCount: 2, treatmentAMean: 4, treatmentBMean: 2, meanDifference: 2 }]
+    };
+    const dashboard = {
+      batch: { id: 41, filename: "fixture.xlsx", importedAt: "2026-01-01T00:00:00.000Z", workbookHash: "fixture-hash", rowCount: 6, accessionCount: 3, speciesCount: 1, treatmentCount: 2, warnings: [] },
+      metrics: { trials: 6, accessions: 3, species: 1, treatments: 2, doneRate: 1, observationsExtracted: 0 },
+      treatmentSummaries: [],
+      speciesSummaries: [{ species: "Lomatium testii", rows: 6, accessions: 3, treatments: 2, pcCount: 6, completedContrastCount: 1, activeContrastCount: 0, unpairedScoredTreatmentCount: 0 }],
+      speciesTreatmentEffects: [effect],
+      pairedComparisons: [],
+      advancedComparisons: [],
+      trialQueue: [],
+      dataQualityIssues: [],
+      askSuggestions: [],
+      speciesInsights: [],
+      aiInsightStatus: { configured: false, state: "not_configured", message: "OpenAI is optional.", model: null, generatedAt: null },
+      speciesResearchCacheStatus: null
+    };
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
+      getDashboard: async () => dashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      getSpeciesResearchCacheStatus: async () => ({ batchId: 41, scopeHash: "fixture-hash", cacheVersion: "species-research-v5", totalSpecies: 1, researchedSpecies: 0, missingSpecies: ["Lomatium testii"], generatedAtLatest: null })
+    };
+  });
+
+  await page.goto("/");
+  await expect(page.getByRole("heading", { name: "Species-level local results" })).toBeVisible();
+  await page.locator(".species-results-overview-list button").click();
+  await expect(page.getByRole("heading", { name: "Species Explorer" }).last()).toBeVisible();
+
+  const localResults = page.locator(".species-local-results");
+  await expect(localResults).toContainText("Local propagation results");
+  await expect(localResults).toContainText("Completed matched trials");
+  await expect(localResults).toContainText("Consistent local lift");
+  await expect(localResults).toContainText("Liner rootball quality (LPC)");
+  await expect(localResults).toContainText("Cold stratification");
+
+  const localTop = await localResults.evaluate((element) => element.getBoundingClientRect().top);
+  const aiStateTop = await page.locator(".species-research-state").evaluate((element) => element.getBoundingClientRect().top);
+  expect(localTop).toBeLessThan(aiStateTop);
+
+  await localResults.getByText("View matched workbook evidence (3)").click();
+  await expect(localResults.getByRole("columnheader", { name: "Propagation accession" })).toBeVisible();
+  await expect(localResults.getByRole("columnheader", { name: "Cohort" })).toBeVisible();
+  await expect(localResults.getByRole("cell", { name: "2024" }).first()).toBeVisible();
+  await expect(localResults.getByText("fixture.xlsx · P_accessions · row 12, 13")).toBeVisible();
 });

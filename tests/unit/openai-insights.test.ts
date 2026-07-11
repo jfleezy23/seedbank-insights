@@ -19,7 +19,7 @@ import {
   parseSpeciesInsightResponse,
   suggestHeaderAliases
 } from "../../electron/main/openai-insights";
-import type { DashboardData, ImportResult, TrialRecord } from "../../src/core/types";
+import type { DashboardData, ImportResult, SpeciesTreatmentEffect, TrialRecord } from "../../src/core/types";
 import { parseTreatment } from "../../src/core/treatments";
 
 function trial(partial: Partial<TrialRecord> & Pick<TrialRecord, "pAccession" | "species" | "treatment" | "pc">): TrialRecord {
@@ -52,10 +52,13 @@ function trial(partial: Partial<TrialRecord> & Pick<TrialRecord, "pAccession" | 
     fourPcRaw: partial.fourPcRaw ?? partial.fourPc ?? null,
     fourPcScale: partial.fourPcScale ?? null,
     location: null,
-    status: "ND",
+    status: partial.status ?? "ND",
     pcd: null,
     notes: null,
-    treatmentComponents: parseTreatment(partial.treatment)
+    treatmentComponents: parseTreatment(partial.treatment),
+    sourceFilename: partial.sourceFilename ?? "fixture.xlsx",
+    sourceWorksheet: partial.sourceWorksheet ?? "Trials",
+    workbookHash: partial.workbookHash ?? "hash"
   };
 }
 
@@ -83,6 +86,7 @@ function dashboard(): DashboardData {
     metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
     treatmentSummaries: [],
     speciesSummaries: [],
+    speciesTreatmentEffects: [],
     pairedComparisons: [],
     trialQueue: [],
     dataQualityIssues: [],
@@ -317,6 +321,191 @@ describe("OpenAI request model routing", () => {
       pcScale: "percent_0_100"
     });
     expect(responsesCreateMock.mock.calls[0][0].instructions).toContain("pcRaw/pcScale");
+  });
+
+  it("passes authoritative completed and active local treatment effects into species research", async () => {
+    responsesCreateMock.mockResolvedValueOnce({ output_text: validSpeciesResearchResponse() });
+    const dashboardWithLocalEffects: DashboardData = {
+      ...dashboard(),
+      speciesTreatmentEffects: [
+        {
+          id: "completed-cs-control",
+          species: "Phacelia   heterophylla",
+          propaguleType: "seed",
+          outcome: "completed",
+          treatmentA: "CS",
+          treatmentB: "C",
+          controlTreatment: "C",
+          pairCount: 3,
+          accessionCount: 3,
+          sourceAccessionCount: 3,
+          higherCount: 2,
+          tiedCount: 1,
+          lowerCount: 0,
+          meanDiff: 1,
+          medianDiff: 1,
+          ciLow: 0.5,
+          ciHigh: 1.5,
+          verdict: "consistent_local_lift",
+          descriptiveOnly: false,
+          scorePresentation: "pc_class",
+          exactPercentageDelta: null,
+          evidence: [
+            {
+              pAccession: "P1",
+              sourceAccession: "SRC",
+              cohort: "ready workbook",
+              scoreA: 4,
+              scoreB: 2,
+              diff: 2,
+              sourceFilename: "fixture.xlsx",
+              worksheet: "Trials",
+              workbookHash: "hash",
+              sourceRows: [2, 3],
+              recordedAt: "2025-02-01"
+            }
+          ],
+          followUps: [{ endpoint: "lpc", pairCount: 1, treatmentAMean: 3, treatmentBMean: 2.5, meanDifference: 0.5 }]
+        },
+        {
+          id: "active-ws-control",
+          species: "Phacelia heterophylla",
+          propaguleType: "seed",
+          outcome: "active",
+          treatmentA: "WS",
+          treatmentB: "C",
+          controlTreatment: "C",
+          pairCount: 1,
+          accessionCount: 1,
+          sourceAccessionCount: 1,
+          higherCount: 1,
+          tiedCount: 0,
+          lowerCount: 0,
+          meanDiff: 2,
+          medianDiff: 2,
+          ciLow: 0,
+          ciHigh: 4,
+          verdict: "one_observed_result",
+          descriptiveOnly: true,
+          scorePresentation: "pc_class",
+          exactPercentageDelta: null,
+          evidence: [
+            {
+              pAccession: "P2",
+              sourceAccession: "SRC2",
+              cohort: "original workbook",
+              scoreA: 4,
+              scoreB: 2,
+              diff: 2,
+              sourceFilename: "original.xlsx",
+              worksheet: "Trials",
+              workbookHash: "other-hash",
+              sourceRows: [2, 3],
+              recordedAt: null
+            }
+          ],
+          followUps: []
+        },
+        {
+          id: "other-species",
+          species: "Ceanothus velutinus",
+          propaguleType: "seed",
+          outcome: "completed",
+          treatmentA: "CS",
+          treatmentB: "C",
+          controlTreatment: "C",
+          pairCount: 99,
+          accessionCount: 99,
+          sourceAccessionCount: 99,
+          higherCount: 99,
+          tiedCount: 0,
+          lowerCount: 0,
+          meanDiff: 1,
+          medianDiff: 1,
+          ciLow: 0.5,
+          ciHigh: 1.5,
+          verdict: "consistent_local_lift",
+          descriptiveOnly: false,
+          scorePresentation: "pc_class",
+          exactPercentageDelta: null,
+          evidence: [],
+          followUps: []
+        }
+      ] satisfies SpeciesTreatmentEffect[]
+    };
+
+    await generateSpeciesResearch({
+      apiKey: "sk-placeholder",
+      species: "Phacelia heterophylla",
+      importResult: importResult([
+        trial({ pAccession: "P1", species: "Phacelia heterophylla", treatment: "C", pc: 2, sourceRow: 2, status: "D" }),
+        trial({ pAccession: "P1", species: "Phacelia heterophylla", treatment: "CS", pc: 4, sourceRow: 3, status: "D" }),
+        trial({
+          pAccession: "P2",
+          sourceAccession: "SRC2",
+          species: "Phacelia heterophylla",
+          treatment: "C",
+          pc: 2,
+          sourceRow: 2,
+          status: "ND",
+          sourceFilename: "original.xlsx",
+          workbookHash: "other-hash"
+        }),
+        trial({
+          pAccession: "P2",
+          sourceAccession: "SRC2",
+          species: "Phacelia heterophylla",
+          treatment: "WS",
+          pc: 4,
+          sourceRow: 3,
+          status: "ND",
+          sourceFilename: "original.xlsx",
+          workbookHash: "other-hash"
+        })
+      ]),
+      dashboard: dashboardWithLocalEffects,
+      taxonomy: null,
+      sources: []
+    });
+
+    const request = responsesCreateMock.mock.calls[0][0];
+    const localEffects = JSON.parse(request.input).localEvidence.localTreatmentEffects;
+    expect(localEffects).toMatchObject({
+      completed: [
+        {
+          treatments: ["CS", "C"],
+          propaguleType: "seed",
+          outcomeStatus: "completed",
+          pairCount: 3,
+          verdict: "consistent_local_lift",
+          descriptiveOnly: false,
+          conditions: ["Cohort: ready workbook", "Recorded trial termination date: 2025-02-01"],
+          provenanceRows: [
+            { sourceRow: 2, accession: "P1", treatment: "C", trialTerminationDate: "2025-02-01" },
+            { sourceRow: 3, accession: "P1", treatment: "CS", trialTerminationDate: "2025-02-01" }
+          ],
+          afterPropagation: [{ endpoint: "lpc", meanDifference: 0.5 }]
+        }
+      ],
+      active: [
+        {
+          treatments: ["WS", "C"],
+          outcomeStatus: "active",
+          pairCount: 1,
+          verdict: "one_observed_result",
+          descriptiveOnly: true,
+          provenanceRows: [
+            { sourceRow: 2, sourceFilename: "original.xlsx", workbookHash: "other-hash", accession: "P2", treatment: "C" },
+            { sourceRow: 3, sourceFilename: "original.xlsx", workbookHash: "other-hash", accession: "P2", treatment: "WS" }
+          ]
+        }
+      ]
+    });
+    expect(JSON.stringify(localEffects)).not.toContain("Ceanothus velutinus");
+    expect(request.instructions).toContain("localEvidence.localTreatmentEffects");
+    expect(request.instructions).toContain("do not upgrade, downgrade, reinterpret, refute, quantify beyond, or contradict");
+    expect(request.instructions).toContain("Completed effects are the primary local evidence");
+    expect(request.instructions).toContain("local workbook evidence, not external proof");
   });
 
   it("retries malformed species synthesis once with gpt-5.5", async () => {

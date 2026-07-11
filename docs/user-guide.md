@@ -66,18 +66,29 @@ Use this view to find promising signals and obvious data-quality blockers before
 
 ## Review Species
 
-The Species Explorer separates deterministic species summaries from optional AI species insight cards.
+**Species Explorer leads with Local propagation results.** These are matched, local workbook comparisons for the selected species and propagule type—not a ranking made from unrelated treatment averages. A result compares treatments only when the same accession, source lot when recorded, species, propagule type, cohort, and workbook version support the pair.
 
-Deterministic summaries include:
+For each comparison, review the named treatment pair, propagation type, matched-accession count, win/tie/loss count, PC effect, interval when available, verdict, conditions, and cited workbook rows. A documented `C` is shown as the control; a pair without `C` is a comparison between two treatments, not a hidden control. Undocumented treatment codes remain **Descriptive only** until they are documented in the Treatment Codebook.
 
-- row count
-- accession count
-- treatment count
-- best observed treatment
-- mean `PC`
-- confidence label
+- **Completed (`D`)** comparisons are the primary local result.
+- **Active (`ND`)** comparisons are preliminary; they can guide follow-up but do not replace completed evidence.
+- `PC` is the germination/propagation endpoint. `LPC` (liner) and `4PC` (4-inch rootball) are reported as separate after-propagation outcomes; blanks are not zeros and the app never combines them into one score.
+- If no valid matched pair exists, the correct conclusion is “No matched treatment comparison recorded for this species,” not a best treatment from raw averages.
 
-AI species cards, when generated, must keep the deterministic confidence label and cite row evidence.
+Optional AI research appears after the local results. It can provide source-backed context and help frame the next trial, but it cannot replace, upgrade, or contradict the deterministic local verdict.
+
+### Field Terms
+
+- **Control:** the comparison condition, commonly the documented `C` code. A control is named only when it is actually recorded.
+- **Pretreatment:** a step applied before sowing or propagation, such as scarification, soaking, or stratification.
+- **Propagation class (`PC`):** the workbook’s recorded germination endpoint, either an ordinal 0–5 class or an exact percentage with its scale retained.
+- **Trial termination date (`TTD`):** the date the recorded trial outcome was closed or assessed; it is distinct from a start date.
+- **Source lot / source accession:** the recorded origin or lot identity of the propagules. It helps prevent unlike material from being treated as one replicate.
+- **Matched accession:** the same propagation accession, with matching source lot when available, species, propagule type, cohort, and workbook version evaluated under two treatments.
+- **Cold-moist stratification:** a moist chilling pretreatment intended to address dormancy. Duration and temperature must come from the local protocol, not the abbreviation alone.
+- **Warm-moist stratification:** a moist warm-phase pretreatment, sometimes used before or with chilling. It is not interchangeable with cold stratification.
+
+These terms follow the native-plant nursery practice of documenting seed handling, treatment, sowing, and later seedling outcomes separately. [US Forest Service native-plant nursery manual](https://research.fs.usda.gov/treesearch/33075)
 
 ## Compare Treatments
 

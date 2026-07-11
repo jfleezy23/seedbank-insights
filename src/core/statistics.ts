@@ -6,12 +6,17 @@ import type {
   DataQualityIssue,
   PairedComparison,
   PropaguleType,
+  SpeciesEffectOutcome,
+  SpeciesEffectVerdict,
+  SpeciesFollowUpEffect,
+  SpeciesTreatmentEffect,
+  SpeciesTreatmentPairEvidence,
   TreatmentSummary,
   TrialQueueItem,
   TrialRecord
 } from "./types";
 
-function definedScore(value: number | null): value is number {
+function definedScore(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
 }
 
@@ -387,6 +392,337 @@ function clusterInterval(speciesEffects: Map<string, number>, iterations = 2000)
     estimates.push(total / values.length);
   }
   return [percentile(estimates, 0.025), percentile(estimates, 0.975)];
+}
+
+interface SpeciesTreatmentArm {
+  treatment: string;
+  rows: TrialRecord[];
+  score: number;
+  exactPercentageScore: number | null;
+}
+
+interface SpeciesTreatmentPairCandidate {
+  species: string;
+  normalizedSpecies: string;
+  propaguleType: PropaguleType;
+  outcome: SpeciesEffectOutcome;
+  treatmentA: string;
+  treatmentB: string;
+  controlTreatment: string | null;
+  evidence: SpeciesTreatmentPairEvidence;
+  armARows: TrialRecord[];
+  armBRows: TrialRecord[];
+  exactPercentageDiff: number | null;
+  descriptiveOnly: boolean;
+}
+
+function normalizedSpecies(value: string): string {
+  return value.trim().toLocaleLowerCase();
+}
+
+function speciesEffectOutcome(trial: TrialRecord): SpeciesEffectOutcome | null {
+  if (trial.status === "D") return "completed";
+  if (trial.status === "ND") return "active";
+  return null;
+}
+
+function isSpeciesEffectTrial(trial: TrialRecord): boolean {
+  return (
+    definedScore(trial.pc) &&
+    propaguleType(trial) !== "unknown" &&
+    trial.analysisEligibility !== "quarantined" &&
+    trial.replicateClassification !== "ambiguous_duplicate" &&
+    speciesEffectOutcome(trial) !== null
+  );
+}
+
+function isControlTreatment(treatment: string): boolean {
+  return treatment.trim().toUpperCase() === "C";
+}
+
+function sortedUniqueText(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.filter((value): value is string => Boolean(value?.trim())).map((value) => value.trim()))].sort(
+    (left, right) => left.localeCompare(right)
+  );
+}
+
+function provenanceText(rows: TrialRecord[], selector: (row: TrialRecord) => string | undefined): string {
+  return sortedUniqueText(rows.map(selector)).join(" | ");
+}
+
+function stableDisplayText(rows: TrialRecord[], selector: (row: TrialRecord) => string | null | undefined, fallback: string): string {
+  return sortedUniqueText(rows.map(selector))[0] ?? fallback;
+}
+
+function stableCohort(rows: TrialRecord[]): string {
+  const cohorts = sortedUniqueText(rows.map((row) => row.cohort));
+  if (cohorts.length === 1) return cohorts[0];
+  return cohorts.length ? "Mixed cohort" : "Unknown";
+}
+
+function latestRecordedAt(rows: TrialRecord[]): string | null {
+  const dates = sortedUniqueText(rows.map((row) => row.ttd));
+  return dates[dates.length - 1] ?? null;
+}
+
+function exactPercentageScore(
+  rows: TrialRecord[],
+  value: (row: TrialRecord) => number | null,
+  raw: (row: TrialRecord) => number | null | undefined,
+  scale: (row: TrialRecord) => TrialRecord["pcScale"]
+): number | null {
+  const scoredRows = rows.filter((row) => definedScore(value(row)));
+  if (!scoredRows.length) return null;
+  if (!scoredRows.every((row) => scale(row) === "percent_0_100" && definedScore(raw(row)))) return null;
+  return median(scoredRows.map((row) => raw(row)).filter(definedScore));
+}
+
+function treatmentArm(rows: TrialRecord[], treatment: string): SpeciesTreatmentArm {
+  return {
+    treatment,
+    rows,
+    score: median(rows.map((row) => row.pc).filter(definedScore)) ?? 0,
+    exactPercentageScore: exactPercentageScore(
+      rows,
+      (row) => row.pc,
+      (row) => row.pcRaw,
+      (row) => row.pcScale
+    )
+  };
+}
+
+function effectCandidateKey(candidate: Pick<SpeciesTreatmentPairCandidate, "normalizedSpecies" | "propaguleType" | "outcome" | "treatmentA" | "treatmentB">): string {
+  return JSON.stringify([
+    candidate.normalizedSpecies,
+    candidate.propaguleType,
+    candidate.outcome,
+    candidate.treatmentA,
+    candidate.treatmentB
+  ]);
+}
+
+function effectId(candidate: Pick<SpeciesTreatmentPairCandidate, "normalizedSpecies" | "propaguleType" | "outcome" | "treatmentA" | "treatmentB">): string {
+  return [
+    "species-effect",
+    candidate.propaguleType,
+    candidate.outcome,
+    candidate.normalizedSpecies,
+    candidate.treatmentA,
+    candidate.treatmentB
+  ]
+    .map((part) => encodeURIComponent(part))
+    .join(":");
+}
+
+function candidateSort(left: SpeciesTreatmentPairCandidate, right: SpeciesTreatmentPairCandidate): number {
+  return (
+    left.evidence.workbookHash.localeCompare(right.evidence.workbookHash) ||
+    left.evidence.pAccession.localeCompare(right.evidence.pAccession) ||
+    left.evidence.sourceAccession.localeCompare(right.evidence.sourceAccession) ||
+    left.evidence.cohort.localeCompare(right.evidence.cohort) ||
+    left.evidence.sourceRows.join(",").localeCompare(right.evidence.sourceRows.join(","))
+  );
+}
+
+function speciesEffectVerdict(
+  pairCount: number,
+  higher: number,
+  lower: number,
+  ciLow: number,
+  ciHigh: number,
+  descriptiveOnly: boolean
+): SpeciesEffectVerdict {
+  if (descriptiveOnly) return "descriptive_only";
+  if (pairCount === 1) return "one_observed_result";
+  if (pairCount === 2) return "early_local_pattern";
+
+  const nonTies = higher + lower;
+  if (nonTies && higher / nonTies >= 2 / 3 && ciLow > 0) return "consistent_local_lift";
+  if (nonTies && lower / nonTies >= 2 / 3 && ciHigh < 0) return "consistent_lower_response";
+  return "mixed_local_response";
+}
+
+function followUpEffects(candidates: SpeciesTreatmentPairCandidate[]): SpeciesFollowUpEffect[] {
+  const endpoints: Array<{
+    endpoint: SpeciesFollowUpEffect["endpoint"];
+    value: (row: TrialRecord) => number | null;
+  }> = [
+    {
+      endpoint: "lpc",
+      value: (row) => row.lpc
+    },
+    {
+      endpoint: "four_pc",
+      value: (row) => row.fourPc
+    }
+  ];
+
+  return endpoints.flatMap((endpoint) => {
+    const paired = candidates.flatMap((candidate) => {
+      const scoreA = median(candidate.armARows.map(endpoint.value).filter(definedScore));
+      const scoreB = median(candidate.armBRows.map(endpoint.value).filter(definedScore));
+      if (scoreA === null || scoreB === null) return [];
+      return [
+        {
+          scoreA,
+          scoreB
+        }
+      ];
+    });
+    if (!paired.length) return [];
+    return [
+      {
+        endpoint: endpoint.endpoint,
+        pairCount: paired.length,
+        treatmentAMean: round(mean(paired.map((pair) => pair.scoreA)) ?? 0, 2),
+        treatmentBMean: round(mean(paired.map((pair) => pair.scoreB)) ?? 0, 2),
+        meanDifference: round(mean(paired.map((pair) => pair.scoreA - pair.scoreB)) ?? 0, 2)
+      }
+    ];
+  });
+}
+
+/**
+ * Builds species-first, within-accession treatment evidence. This is deliberately
+ * independent of Advanced Analysis: completed and active rows remain separate,
+ * while every contrast preserves the raw workbook provenance needed for review.
+ */
+export function buildSpeciesTreatmentEffects(trials: TrialRecord[]): SpeciesTreatmentEffect[] {
+  const units = new Map<string, TrialRecord[]>();
+  for (const trial of trials) {
+    if (!isSpeciesEffectTrial(trial)) continue;
+    const outcome = speciesEffectOutcome(trial);
+    if (!outcome) continue;
+    const key = `${outcome}\u0000${experimentalUnitKey(trial)}`;
+    units.set(key, [...(units.get(key) ?? []), trial]);
+  }
+
+  const candidatesByEffect = new Map<string, SpeciesTreatmentPairCandidate[]>();
+  for (const rows of units.values()) {
+    const byTreatment = new Map<string, TrialRecord[]>();
+    for (const row of rows) {
+      byTreatment.set(row.treatment, [...(byTreatment.get(row.treatment) ?? []), row]);
+    }
+    const arms = [...byTreatment.entries()]
+      .map(([treatment, treatmentRows]) => treatmentArm(treatmentRows, treatment))
+      .sort((left, right) => left.treatment.localeCompare(right.treatment));
+    for (let leftIndex = 0; leftIndex < arms.length; leftIndex += 1) {
+      for (let rightIndex = leftIndex + 1; rightIndex < arms.length; rightIndex += 1) {
+        let armA = arms[leftIndex];
+        let armB = arms[rightIndex];
+        if (isControlTreatment(armA.treatment)) [armA, armB] = [armB, armA];
+        const allRows = [...armA.rows, ...armB.rows];
+        const first = allRows[0];
+        const normalized = normalizedSpecies(first.species);
+        const outcome = speciesEffectOutcome(first);
+        if (!outcome) continue;
+        const evidence: SpeciesTreatmentPairEvidence = {
+          pAccession: stableDisplayText(allRows, (row) => row.pAccession, ""),
+          sourceAccession: stableDisplayText(allRows, (row) => row.sourceAccession, ""),
+          cohort: stableCohort(allRows),
+          scoreA: round(armA.score, 2),
+          scoreB: round(armB.score, 2),
+          diff: round(armA.score - armB.score, 2),
+          sourceFilename: provenanceText(allRows, (row) => row.sourceFilename),
+          worksheet: provenanceText(allRows, (row) => row.sourceWorksheet),
+          workbookHash: provenanceText(allRows, (row) => row.workbookHash),
+          sourceRows: [...new Set(allRows.map((row) => row.sourceRow))].sort((a, b) => a - b),
+          recordedAt: latestRecordedAt(allRows)
+        };
+        const candidate: SpeciesTreatmentPairCandidate = {
+          species: stableDisplayText(allRows, (row) => row.species, first.species.trim()),
+          normalizedSpecies: normalized,
+          propaguleType: propaguleType(first),
+          outcome,
+          treatmentA: armA.treatment,
+          treatmentB: armB.treatment,
+          controlTreatment: isControlTreatment(armB.treatment) ? armB.treatment : null,
+          evidence,
+          armARows: armA.rows,
+          armBRows: armB.rows,
+          exactPercentageDiff:
+            armA.exactPercentageScore === null || armB.exactPercentageScore === null
+              ? null
+              : round(armA.exactPercentageScore - armB.exactPercentageScore, 2),
+          descriptiveOnly: allRows.some((row) => row.analysisEligibility === "descriptive_only")
+        };
+        const key = effectCandidateKey(candidate);
+        candidatesByEffect.set(key, [...(candidatesByEffect.get(key) ?? []), candidate]);
+      }
+    }
+  }
+
+  return [...candidatesByEffect.values()]
+    .map<SpeciesTreatmentEffect>((candidates) => {
+      const ordered = [...candidates].sort(candidateSort);
+      const first = ordered[0];
+      const diffs = ordered.map((candidate) => candidate.evidence.diff);
+      const higher = diffs.filter((diff) => diff > 0).length;
+      const lower = diffs.filter((diff) => diff < 0).length;
+      const [ciLow, ciHigh] = bootstrapInterval(diffs);
+      const descriptiveOnly = ordered.some((candidate) => candidate.descriptiveOnly);
+      const allPairsHaveExactPercentage = ordered.every((candidate) => candidate.exactPercentageDiff !== null);
+      return {
+        id: effectId(first),
+        species: first.species,
+        propaguleType: first.propaguleType,
+        outcome: first.outcome,
+        treatmentA: first.treatmentA,
+        treatmentB: first.treatmentB,
+        controlTreatment: first.controlTreatment,
+        pairCount: ordered.length,
+        accessionCount: new Set(ordered.map((candidate) => candidate.evidence.pAccession)).size,
+        sourceAccessionCount: new Set(
+          ordered.map((candidate) => candidate.evidence.sourceAccession).filter((sourceAccession) => Boolean(sourceAccession))
+        ).size,
+        higherCount: higher,
+        tiedCount: diffs.length - higher - lower,
+        lowerCount: lower,
+        meanDiff: round(mean(diffs) ?? 0, 2),
+        medianDiff: round(median(diffs) ?? 0, 2),
+        ciLow,
+        ciHigh,
+        verdict: speciesEffectVerdict(ordered.length, higher, lower, ciLow, ciHigh, descriptiveOnly),
+        descriptiveOnly,
+        scorePresentation: allPairsHaveExactPercentage ? "percentage_points" : "pc_class",
+        exactPercentageDelta: allPairsHaveExactPercentage
+          ? round(mean(ordered.map((candidate) => candidate.exactPercentageDiff as number)) ?? 0, 2)
+          : null,
+        evidence: ordered.map((candidate) => candidate.evidence),
+        followUps: followUpEffects(ordered)
+      };
+    })
+    .sort(
+      (left, right) =>
+        left.species.localeCompare(right.species) ||
+        left.propaguleType.localeCompare(right.propaguleType) ||
+        left.outcome.localeCompare(right.outcome) ||
+        left.treatmentA.localeCompare(right.treatmentA) ||
+        left.treatmentB.localeCompare(right.treatmentB)
+    );
+}
+
+/**
+ * Counts scored treatment arms that have no alternative treatment inside the
+ * same completed or active experimental unit. Replicates count as one arm.
+ */
+export function countUnpairedScoredTreatmentArms(trials: TrialRecord[]): Map<string, number> {
+  const units = new Map<string, TrialRecord[]>();
+  for (const trial of trials) {
+    if (!isSpeciesEffectTrial(trial)) continue;
+    const outcome = speciesEffectOutcome(trial);
+    if (!outcome) continue;
+    const key = `${outcome}\u0000${experimentalUnitKey(trial)}`;
+    units.set(key, [...(units.get(key) ?? []), trial]);
+  }
+  const counts = new Map<string, number>();
+  for (const rows of units.values()) {
+    const arms = new Set(rows.map((row) => row.treatment));
+    if (arms.size > 1) continue;
+    const key = normalizedSpecies(rows[0].species);
+    counts.set(key, (counts.get(key) ?? 0) + arms.size);
+  }
+  return counts;
 }
 
 function exactSignPValue(wins: number, losses: number): number | null {

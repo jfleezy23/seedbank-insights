@@ -15,6 +15,7 @@ import type {
   SpeciesResearchResult,
   SpeciesResearchSource,
   SpeciesResearchTechnique,
+  SpeciesTreatmentEffect,
   SpeciesTaxonomyMatch,
   TrialRecord
 } from "../../src/core/types";
@@ -603,6 +604,8 @@ interface SpeciesContext {
     family: string | null;
     treatment: string;
     treatmentComponents: TrialRecord["treatmentComponents"];
+    startDate: string | null;
+    trialTerminationDate: string | null;
     pc: number | null;
     pcRaw: number | null;
     pcScale: TrialRecord["pcScale"];
@@ -622,6 +625,39 @@ interface SpeciesContext {
     date: string | null;
     rawSnippet: string;
   }>;
+}
+
+type UnknownRecord = Record<string, unknown>;
+
+interface ResearchTreatmentEffect {
+  treatments: string[];
+  propaguleType: string | null;
+  outcomeStatus: "completed" | "active";
+  pairCount: number | null;
+  wins: number | null;
+  ties: number | null;
+  losses: number | null;
+  direction: string | null;
+  effect: {
+    value: number | null;
+    metric: string | null;
+    confidenceInterval: { low: number | null; high: number | null };
+  };
+  verdict: string | null;
+  descriptiveOnly: boolean;
+  conditions: string[];
+  provenanceRows: Array<{
+    sourceRow: number;
+    sourceFilename: string;
+    worksheet: string;
+    workbookHash: string;
+    accession: string;
+    sourceAccession: string;
+    treatment: string;
+    startDate: string | null;
+    trialTerminationDate: string | null;
+  }>;
+  afterPropagation: unknown;
 }
 
 function confidenceRank(label: ConfidenceLabel): number {
@@ -931,6 +967,177 @@ function localEvidenceForResearch(context: SpeciesContext): SpeciesInsightEviden
   return fallbackEvidence(context).slice(0, 5);
 }
 
+function isUnknownRecord(value: unknown): value is UnknownRecord {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function treatmentEffectRecord(effect: SpeciesTreatmentEffect): UnknownRecord {
+  return Object.fromEntries(Object.entries(effect));
+}
+
+function normalizedText(value: unknown): string | null {
+  return typeof value === "string" && value.trim() ? normalizeSpaces(value) : null;
+}
+
+function firstText(record: UnknownRecord, names: string[]): string | null {
+  for (const name of names) {
+    const value = normalizedText(record[name]);
+    if (value) return value;
+  }
+  return null;
+}
+
+function firstFiniteNumber(record: UnknownRecord, names: string[]): number | null {
+  for (const name of names) {
+    const value = record[name];
+    if (typeof value === "number" && Number.isFinite(value)) return value;
+  }
+  return null;
+}
+
+function treatmentEffectOutcomeStatus(effect: UnknownRecord): "completed" | "active" | null {
+  const status = firstText(effect, ["outcomeStatus", "outcome", "status", "trialStatus"])
+    ?.toLowerCase()
+    .replace(/[_\s-]+/g, "");
+  if (["completed", "complete", "done", "d"].includes(status ?? "")) return "completed";
+  if (["active", "preliminary", "nd", "notdone", "ongoing"].includes(status ?? "")) return "active";
+  return null;
+}
+
+function treatmentNames(effect: UnknownRecord): string[] {
+  const direct = Array.isArray(effect.treatments)
+    ? effect.treatments.map(normalizedText).filter((value): value is string => value !== null)
+    : [];
+  if (direct.length >= 2) return [...new Set(direct)].slice(0, 2);
+
+  const pair = [
+    firstText(effect, ["baseline", "control", "treatmentA", "leftTreatment"]),
+    firstText(effect, ["treatment", "candidate", "treatmentB", "rightTreatment"])
+  ].filter((value): value is string => value !== null);
+  return [...new Set(pair)].slice(0, 2);
+}
+
+function effectProvenanceRows(effect: UnknownRecord, context: SpeciesContext): ResearchTreatmentEffect["provenanceRows"] {
+  const trialKey = (workbookHash: string, sourceRow: number) => `${workbookHash}\u0000${sourceRow}`;
+  const byWorkbookRow = new Map(context.trials.map((trial) => [trialKey(trial.workbookHash, trial.sourceRow), trial]));
+  const evidence = Array.isArray(effect.evidence) ? effect.evidence.filter(isUnknownRecord) : [];
+  const directRows = evidence.flatMap((pair) => {
+    const workbookHash = firstText(pair, ["workbookHash"]) ?? "";
+    const sourceFilename = firstText(pair, ["sourceFilename"]) ?? "";
+    const worksheet = firstText(pair, ["worksheet"]) ?? "";
+    const accession = firstText(pair, ["pAccession", "accession"]) ?? "";
+    const sourceAccession = firstText(pair, ["sourceAccession"]) ?? "";
+    const trialTerminationDate = firstText(pair, ["recordedAt"]);
+    const sourceRows = Array.isArray(pair.sourceRows)
+      ? pair.sourceRows.filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value > 0)
+      : [];
+    return sourceRows.map((sourceRow) => {
+      const trial = byWorkbookRow.get(trialKey(workbookHash, sourceRow));
+      return {
+        sourceRow,
+        sourceFilename,
+        worksheet,
+        workbookHash,
+        accession: trial?.accession ?? accession,
+        sourceAccession: trial?.sourceAccession ?? sourceAccession,
+        treatment: trial?.treatment ?? "",
+        startDate: trial?.startDate ?? null,
+        trialTerminationDate: trialTerminationDate ?? trial?.trialTerminationDate ?? null
+      };
+    });
+  });
+  if (directRows.length) return directRows;
+  return [];
+}
+
+function effectConditions(effect: UnknownRecord): string[] {
+  const raw = effect.conditions ?? effect.condition ?? effect.conditionsSummary ?? effect.treatmentConditions;
+  if (Array.isArray(raw)) {
+    return raw.map(normalizedText).filter((value): value is string => value !== null).slice(0, 8);
+  }
+  const condition = normalizedText(raw);
+  if (condition) return [condition];
+
+  const evidence = Array.isArray(effect.evidence) ? effect.evidence.filter(isUnknownRecord) : [];
+  const cohorts = [...new Set(evidence.map((pair) => normalizedText(pair.cohort)).filter((value): value is string => value !== null))];
+  const recordedAt = [
+    ...new Set(evidence.map((pair) => normalizedText(pair.recordedAt)).filter((value): value is string => value !== null))
+  ];
+  return [
+    ...cohorts.map((cohort) => `Cohort: ${cohort}`),
+    ...recordedAt.map((date) => `Recorded trial termination date: ${date}`)
+  ];
+}
+
+function treatmentEffectForResearch(effect: UnknownRecord, context: SpeciesContext): ResearchTreatmentEffect | null {
+  const outcomeStatus = treatmentEffectOutcomeStatus(effect);
+  if (!outcomeStatus) return null;
+
+  const effectDetail = isUnknownRecord(effect.effect) ? effect.effect : null;
+  const afterPropagation = effect.afterPropagation ?? effect.followUps ?? null;
+  const scorePresentation = firstText(effect, ["scorePresentation"]);
+  const exactPercentageDelta = firstFiniteNumber(effect, ["exactPercentageDelta"]);
+  const estimatedEffect =
+    scorePresentation === "percentage_points" && exactPercentageDelta !== null
+      ? exactPercentageDelta
+      : firstFiniteNumber(effectDetail ?? {}, ["value", "estimate", "difference"]) ??
+        firstFiniteNumber(effect, ["effect", "medianDiff", "meanDiff", "difference"]);
+  return {
+    treatments: treatmentNames(effect),
+    propaguleType: firstText(effect, ["propaguleType", "propagule"]),
+    outcomeStatus,
+    pairCount: firstFiniteNumber(effect, ["pairCount", "pairs", "matchedAccessions"]),
+    wins: firstFiniteNumber(effect, ["wins", "improved", "higherCount"]),
+    ties: firstFiniteNumber(effect, ["ties", "tied", "tiedCount"]),
+    losses: firstFiniteNumber(effect, ["losses", "worse", "lowerCount"]),
+    direction:
+      firstText(effect, ["direction"]) ??
+      (estimatedEffect === null
+        ? null
+        : estimatedEffect > 0
+          ? "treatment A higher"
+          : estimatedEffect < 0
+            ? "treatment B higher"
+            : "no directional difference"),
+    effect: {
+      value: estimatedEffect,
+      metric:
+        firstText(effectDetail ?? {}, ["metric", "unit", "label"]) ??
+        firstText(effect, ["effectMetric", "metric", "effectUnit", "scorePresentation"]),
+      confidenceInterval: {
+        low: firstFiniteNumber(effectDetail ?? {}, ["ciLow", "low"]) ?? firstFiniteNumber(effect, ["ciLow", "effectCiLow"]),
+        high: firstFiniteNumber(effectDetail ?? {}, ["ciHigh", "high"]) ?? firstFiniteNumber(effect, ["ciHigh", "effectCiHigh"])
+      }
+    },
+    verdict: firstText(effect, ["verdict"]),
+    descriptiveOnly: effect.descriptiveOnly === true,
+    conditions: effectConditions(effect),
+    provenanceRows: effectProvenanceRows(effect, context),
+    afterPropagation
+  };
+}
+
+function localTreatmentEffectsForResearch(
+  dashboard: DashboardData,
+  context: SpeciesContext
+): { completed: ResearchTreatmentEffect[]; active: ResearchTreatmentEffect[] } | null {
+  const effects = dashboard.speciesTreatmentEffects
+    .map(treatmentEffectRecord)
+    .filter(
+      (effect) =>
+        normalizeSpaces(firstText(effect, ["species"]) ?? "").toLowerCase() ===
+        normalizeSpaces(context.species).toLowerCase()
+    )
+    .map((effect) => treatmentEffectForResearch(effect, context))
+    .filter((effect): effect is ResearchTreatmentEffect => effect !== null);
+  if (!effects.length) return null;
+
+  return {
+    completed: effects.filter((effect) => effect.outcomeStatus === "completed"),
+    active: effects.filter((effect) => effect.outcomeStatus === "active")
+  };
+}
+
 function noSourceResearchResult({
   species,
   context,
@@ -985,7 +1192,12 @@ function noSourceResearchResult({
   };
 }
 
-function localResearchPayload(importResult: ImportResult, context: SpeciesContext, taxonomy: SpeciesTaxonomyMatch | null) {
+function localResearchPayload(
+  importResult: ImportResult,
+  context: SpeciesContext,
+  taxonomy: SpeciesTaxonomyMatch | null,
+  dashboard: DashboardData
+) {
   const rowSet = new Set(context.trials.map((trial) => trial.sourceRow));
   const family = context.family ?? taxonomy?.family ?? null;
   const normalizedFamily = normalizePlantFamilyName(family)?.toLowerCase() ?? null;
@@ -1021,7 +1233,8 @@ function localResearchPayload(importResult: ImportResult, context: SpeciesContex
     deterministicConfidence: context.deterministicConfidence,
     selectedTrials: context.trials,
     observations: context.observations,
-    relatedFamilyOrGenusTrials: relatedTrials
+    relatedFamilyOrGenusTrials: relatedTrials,
+    localTreatmentEffects: localTreatmentEffectsForResearch(dashboard, context)
   };
 }
 
@@ -1108,6 +1321,8 @@ export function buildSpeciesInsightContexts(result: ImportResult): SpeciesContex
             family: trial.family ?? null,
             treatment: trial.treatment,
             treatmentComponents: trial.treatmentComponents,
+            startDate: trial.startDate ?? null,
+            trialTerminationDate: trial.ttd ?? null,
             pc: trial.pc,
             pcRaw: trial.pcRaw ?? trial.pc,
             pcScale: trial.pcScale ?? null,
@@ -1412,12 +1627,12 @@ export async function generateSpeciesResearch({
 
   const client = openAiClient(apiKey);
   const instructions =
-    "You are a senior seed-bank propagation scientist advising researchers who need to get difficult native seeds to germinate faster without overclaiming. Produce a protocol-oriented research assessment for the selected species using the provided local workbook evidence, taxonomy context, and vetted web sources. Good output helps design the next experiment: it separates germination from seedling/production success, names the exact workbook treatment code being evaluated, and states controls, replication needs, success criteria, failure criteria, and risk checks such as viability/fill, contamination, abnormal seedlings, unequal seed numbers, incomplete ND outcomes, and rescue/converted treatments. The pc, lpc, and fourPc fields are normalized 0-5 analysis values. Always inspect pcRaw/pcScale, lpcRaw/lpcScale, and fourPcRaw/fourPcScale: when a scale is percent_0_100, its Raw field is the exact percentage and the normalized value is only its 0-5 class; never report the normalized class as the raw observation. When scale metadata is missing or invalid, do not infer an exact percentage. Do not invent operational details. If CS, WS, GA, smoke, substrate, light, temperature, moisture, or duration are not defined in the payload, say to repeat the local code exactly and list the missing protocol fields as protocolGaps. Every technique must cite one or more localRows from the selected species payload as its local relevance anchor. Every literature-backed claim or technique must also cite one or more exact sourceIds from vettedSources; never invent a source ID. Do not present general family or genus knowledge as a verified protocol. Preserve deterministic confidence labels exactly; never upgrade them and never hide caveats. If vettedSources is empty, useful local_species technique candidates may still be returned, but explicitly caveat that no external source was available. Always produce useful local_species technique candidates from the workbook rows unless the local workbook evidence itself is unusable.";
+    "You are a senior seed-bank propagation scientist advising researchers who need to get difficult native seeds to germinate faster without overclaiming. Produce a protocol-oriented research assessment for the selected species using the provided local workbook evidence, taxonomy context, and vetted web sources. Good output helps design the next experiment: it separates germination from seedling/production success, names the exact workbook treatment code being evaluated, and states controls, replication needs, success criteria, failure criteria, and risk checks such as viability/fill, contamination, abnormal seedlings, unequal seed numbers, incomplete ND outcomes, and rescue/converted treatments. localEvidence.localTreatmentEffects, when present, is deterministic code output for the selected analysis scope. It is authoritative for its listed local treatment pairs: do not upgrade, downgrade, reinterpret, refute, quantify beyond, or contradict its verdicts, directions, pair counts, effects, intervals, descriptive-only state, conditions, or provenance. Treat those results as local workbook evidence, not external proof or a universal protocol. Completed effects are the primary local evidence; active effects are preliminary and must remain labeled that way. Keep PC germination outcomes separate from afterPropagation LPC and 4PC endpoints; never combine them into one success claim. The pc, lpc, and fourPc fields are normalized 0-5 analysis values. Always inspect pcRaw/pcScale, lpcRaw/lpcScale, and fourPcRaw/fourPcScale: when a scale is percent_0_100, its Raw field is the exact percentage and the normalized value is only its 0-5 class; never report the normalized class as the raw observation. When scale metadata is missing or invalid, do not infer an exact percentage. Do not invent operational details. If CS, WS, GA, smoke, substrate, light, temperature, moisture, or duration are not defined in the payload, say to repeat the local code exactly and list the missing protocol fields as protocolGaps. Every technique must cite one or more localRows from the selected species payload as its local relevance anchor. Every literature-backed claim or technique must also cite one or more exact sourceIds from vettedSources; never invent a source ID. Do not present general family or genus knowledge as a verified protocol. Preserve deterministic confidence labels exactly; never upgrade them and never hide caveats. If vettedSources is empty, useful local_species technique candidates may still be returned, but explicitly caveat that no external source was available. Always produce useful local_species technique candidates from the workbook rows unless the local workbook evidence itself is unusable.";
   const input = JSON.stringify({
     batch: dashboard.batch,
     dataQualityIssues: dashboard.dataQualityIssues,
     taxonomy,
-    localEvidence: localResearchPayload(importResult, context, taxonomy),
+    localEvidence: localResearchPayload(importResult, context, taxonomy, dashboard),
     vettedSources: sources
   });
   const requestSynthesis = async (model: string, retry: boolean): Promise<string> => {

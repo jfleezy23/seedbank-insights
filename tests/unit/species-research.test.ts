@@ -82,7 +82,7 @@ describe("species research taxonomy and synthesis", () => {
     };
     const status = await summarizeSpeciesResearchCacheStatus({
       batch,
-      cacheVersion: "species-research-v4",
+      cacheVersion: "species-research-v7",
       species: ["Phacelia heterophylla", "Ceanothus velutinus", "Phacelia heterophylla"],
       readCache: async (_batch, speciesName) =>
         speciesName === "Phacelia heterophylla"
@@ -110,7 +110,7 @@ describe("species research taxonomy and synthesis", () => {
 
     expect(status).toMatchObject({
       batchId: 7,
-      cacheVersion: "species-research-v4",
+      cacheVersion: "species-research-v7",
       totalSpecies: 2,
       researchedSpecies: 1,
       missingSpecies: ["Ceanothus velutinus"],
@@ -132,7 +132,7 @@ describe("species research taxonomy and synthesis", () => {
     };
     const status = await summarizeSpeciesResearchCacheStatus({
       batch,
-      cacheVersion: "species-research-v4",
+      cacheVersion: "species-research-v7",
       species: ["Acmispon americanus", "Grindelia stricta"],
       readCache: async (_batch, speciesName) => ({
         species: speciesName === "Acmispon americanus" ? "Different species" : speciesName,
@@ -174,7 +174,7 @@ describe("species research taxonomy and synthesis", () => {
     };
     const status = await summarizeSpeciesResearchCacheStatus({
       batch,
-      cacheVersion: "species-research-v4",
+      cacheVersion: "species-research-v7",
       species: ["Phacelia heterophylla", "PHACELIA HETEROPHYLLA"],
       readCache: async () => ({
         species: "Phacelia heterophylla",
@@ -281,6 +281,7 @@ describe("species research taxonomy and synthesis", () => {
         metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
         treatmentSummaries: [],
         speciesSummaries: [],
+        speciesTreatmentEffects: [],
         pairedComparisons: [],
         trialQueue: [],
         dataQualityIssues: [],
@@ -377,6 +378,7 @@ describe("species research taxonomy and synthesis", () => {
           metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
           treatmentSummaries: [],
           speciesSummaries: [],
+          speciesTreatmentEffects: [],
           pairedComparisons: [],
           trialQueue: [],
           dataQualityIssues: [],
@@ -454,6 +456,7 @@ describe("species research taxonomy and synthesis", () => {
         metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
         treatmentSummaries: [],
         speciesSummaries: [],
+        speciesTreatmentEffects: [],
         pairedComparisons: [],
         trialQueue: [],
         dataQualityIssues: [],
@@ -531,6 +534,7 @@ describe("species research taxonomy and synthesis", () => {
         metrics: { trials: 1, accessions: 1, species: 1, treatments: 1, doneRate: 0, observationsExtracted: 0 },
         treatmentSummaries: [],
         speciesSummaries: [],
+        speciesTreatmentEffects: [],
         pairedComparisons: [],
         trialQueue: [],
         dataQualityIssues: [],

@@ -15,7 +15,7 @@ SeedBank Insights is a desktop prototype for reviewing PSU-style seed-bank propa
 1. Use **Imports → Dataset Manager** to register locally synced workbook files, review the import preview, and commit immutable versions.
 2. Select an individual analysis scope or explicitly create a combined scope. Importing a file does not silently change the active scope.
 3. Use **Insight Board** for import status, high-level metrics, and where to go next.
-4. Use **Species Explorer** for AI-backed germination research on a selected species.
+4. Use **Species Explorer** to review matched local propagation results for a selected species first, then optional AI-backed germination context.
 5. Use **Treatment Comparator** for deterministic operational paired treatment comparisons.
 6. Use **Advanced Analysis** for completed-trial, propagule-separated contrasts and reproducible exports.
 7. Use **Data Quality** to find quarantined rows, unknown treatment codes, invalid dates, duplicate candidates, and notes that need cleanup.
@@ -37,7 +37,23 @@ Workbook files, local database files, and species research cache files stay loca
 
 OpenAI is optional. API keys are entered in Settings and stored through Electron main with OS-backed safe storage. Renderer code does not persist API keys or call OpenAI directly.
 
-AI-generated text is advisory. Deterministic code owns workbook parsing, calculations, confidence labels, and data-quality warnings.
+AI-generated text is advisory. Deterministic code owns workbook parsing, calculations, confidence labels, and data-quality warnings. In Species Explorer, matched local treatment results lead: completed (`D`) comparisons are primary, active (`ND`) comparisons are preliminary, undocumented codes are descriptive-only, and `PC`, `LPC`, and `4PC` stay separate. AI can explain the local result and suggest a next trial, but cannot upgrade or contradict it.
+
+## Species Explorer
+
+Species Explorer is the primary field-facing tab for asking, “What happened for this species under these treatments?” The first panel shows matched local workbook evidence by species and propagule type. It compares only like with like: same accession, source lot when recorded, cohort, workbook version, and completed or active status.
+
+Use completed results as the main evidence. Treat active results as preliminary. Open the evidence details before making a protocol call so the accession, source lot, cohort, worksheet, row, and recorded date are visible. If the app says there is no matched comparison, that means the workbook does not yet contain a valid within-accession pair for that species; it is not hiding a raw-average winner.
+
+AI research appears below local propagation results. It can help explain field context and suggest follow-up trials, but the local verdict comes from deterministic workbook evidence.
+
+## Species Explorer Terms
+
+- **Control** is the recorded comparison condition, commonly `C`; a non-control pair is presented as two treatments, not as a control comparison.
+- **Pretreatment** is a pre-sowing or propagation step. Cold-moist and warm-moist stratification are different pretreatments; use the documented duration and temperature rather than assuming them from a code.
+- **Propagation class (`PC`)** records the germination endpoint. `LPC` and `4PC` are later liner and 4-inch rootball endpoints, not missing or zero PC values.
+- **Trial termination date (`TTD`)** is when the recorded trial outcome was closed or assessed.
+- **Source lot / source accession** identifies the propagule origin. A **matched accession** compares the same accession and source lot when available, species, propagule type, cohort, and workbook version under two treatments.
 
 ## License
 
