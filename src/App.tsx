@@ -1123,17 +1123,50 @@ function DatasetManager({
           </div>
           <span className="scope-chip">Scope: {activeScope?.name ?? "None"}</span>
         </div>
+        <div className="import-help-grid" aria-label="Dataset Manager concepts">
+          <article className="import-help-card">
+            <strong>Choose workbooks</strong>
+            <p>
+              Pick local synced files and review the preview first. Nothing becomes active until you import reviewed
+              versions.
+            </p>
+          </article>
+          <article className="import-help-card">
+            <strong>Relink moved files</strong>
+            <p>
+              Use Relink when Drive moved, renamed, or cloud-only a file. It reconnects the source without replacing
+              history.
+            </p>
+          </article>
+          <article className="import-help-card">
+            <strong>Pick what to analyze</strong>
+            <p>
+              The active scope is what the rest of the app uses. Choose one cohort or an explicit combined scope.
+            </p>
+          </article>
+          <article className="import-help-card">
+            <strong>Document unknown codes</strong>
+            <p>
+              The Glossary explains acronyms. The codebook changes analysis only after you document a known
+              propagule-specific meaning.
+            </p>
+          </article>
+        </div>
         <div className="import-actions">
           <button type="button" onClick={onPreview} disabled={busy}>
-            <FileSpreadsheet size={17} /> Register or preview files
+            <FileSpreadsheet size={17} /> Choose workbook files
           </button>
           <button type="button" onClick={onCreateCombinedScope} disabled={busy || dataset.sources.length < 2}>
-            Combine latest cohorts
+            Create combined scope
           </button>
         </div>
         <div className="dataset-grid">
           <div>
-            <h3>Registered sources</h3>
+            <h3>Workbook sources</h3>
+            <p className="inline-help">
+              These are the workbook files the app knows about. Check for updates compares the synced file with the
+              last imported version.
+            </p>
             {dataset.sources.length ? dataset.sources.map((source) => (
               <article className="dataset-row" key={source.id}>
                 <div>
@@ -1146,7 +1179,11 @@ function DatasetManager({
             )) : <p>No workbook sources registered.</p>}
           </div>
           <div>
-            <h3>Analysis scope</h3>
+            <h3>Active analysis scope</h3>
+            <p className="inline-help">
+              This controls Insight Board, Advanced Analysis, Ask, and species research. Imports do not switch it for
+              you.
+            </p>
             <select
               aria-label="Active analysis scope"
               value={dataset.activeScopeId ?? ""}
@@ -1165,7 +1202,15 @@ function DatasetManager({
 
       {previews.length ? (
         <section className="panel">
-          <div className="panel-heading"><div><h2>Import compatibility preview</h2><p>Review every file before creating immutable versions.</p></div></div>
+          <div className="panel-heading">
+            <div>
+              <h2>Import compatibility preview</h2>
+              <p>
+                Review before importing. Accepted rows can be analyzed; quarantined rows stay visible for cleanup
+                instead of disappearing.
+              </p>
+            </div>
+          </div>
           <div className="preview-grid">
             {previews.map((preview) => (
               <article className="preview-card" key={preview.token}>
@@ -1204,14 +1249,38 @@ function DatasetManager({
       ) : null}
 
       <section className="panel">
-        <div className="panel-heading"><div><h2>Treatment codebook</h2><p>Unknown tokens remain descriptive-only until explicitly documented.</p></div><span>{codebook.length} entries</span></div>
+        <div className="panel-heading">
+          <div>
+            <h2>Treatment codebook</h2>
+            <p>
+              Advanced: this is where documented local treatment codes become eligible for formal analysis.
+            </p>
+          </div>
+          <span>{codebook.length} entries</span>
+        </div>
+        <p className="inline-help">
+          If you do not know what a token means, leave it descriptive. Saving a codebook entry creates a new version,
+          reruns eligibility, and does not change raw workbook values.
+        </p>
         <form className="codebook-form" onSubmit={submitCodebook}>
-          <select value={propaguleType} onChange={(event) => setPropaguleType(event.target.value as PropaguleType)}>
-            <option value="seed">Seed</option><option value="stem_cutting">Stem cutting</option><option value="division">Division</option>
-          </select>
-          <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Token" />
-          <input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Label" />
-          <input value={meaning} onChange={(event) => setMeaning(event.target.value)} placeholder="Documented meaning" />
+          <label className="codebook-field">
+            <span>Propagule</span>
+            <select value={propaguleType} onChange={(event) => setPropaguleType(event.target.value as PropaguleType)}>
+              <option value="seed">Seed</option><option value="stem_cutting">Stem cutting</option><option value="division">Division</option>
+            </select>
+          </label>
+          <label className="codebook-field">
+            <span>Token</span>
+            <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Example: E" />
+          </label>
+          <label className="codebook-field">
+            <span>Plain label</span>
+            <input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Example: Ethephon" />
+          </label>
+          <label className="codebook-field">
+            <span>Documented meaning</span>
+            <input value={meaning} onChange={(event) => setMeaning(event.target.value)} placeholder="What the token means for this propagule type" />
+          </label>
           <button type="submit" disabled={busy}>Save new version</button>
         </form>
       </section>

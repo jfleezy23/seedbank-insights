@@ -22,9 +22,18 @@ SeedBank Insights is a desktop prototype for reviewing PSU-style seed-bank propa
 8. Use **Trial Queue** for operational follow-up before turning rows into protocol evidence.
 9. Use **Ask** only as a demo Q&A surface over bounded workbook context.
 
+## Dataset Manager Terms
+
+- **Register** means choose a locally synced workbook file and let the app remember its source path and content hash. Registering shows a preview; it does not make the file active by itself.
+- **Choose workbook files** is the button that starts registration and preview. It reads local synced files, but it does not import or activate them until you confirm the reviewed preview.
+- **Relink** reconnects a registered source after a Drive Desktop file moves, is renamed, or becomes cloud-only. It does not merge, deduplicate, or replace historical imports.
+- **Analysis scope** is the dataset currently being analyzed by Insight Board, Advanced Analysis, Ask, and species research. A scope can be one imported cohort or an explicitly created combined scope.
+- **Import preview** is the safety check before committing a version. Accepted rows can be analyzed; quarantined rows remain visible for cleanup instead of being silently dropped.
+- **Treatment codebook** is the formal mapping for treatment tokens. Use it only when a token meaning is known for a specific propagule type. The Glossary explains acronyms, but the codebook controls formal analysis eligibility.
+
 ## Privacy And OpenAI
 
-Workbook files, SQLite data, and species research cache files stay local to the desktop app. Raw project workbooks are ignored by git and should not be committed. The v0.4 source workflow reads synced local files; it does not use Google OAuth, Drive API tokens, background watchers, or raw workbook uploads.
+Workbook files, local database files, and species research cache files stay local to the desktop app. Raw project workbooks are ignored by git and should not be committed. The v0.4 source workflow reads synced local files; it does not use Google OAuth, Drive API tokens, background watchers, or raw workbook uploads.
 
 OpenAI is optional. API keys are entered in Settings and stored through Electron main with OS-backed safe storage. Renderer code does not persist API keys or call OpenAI directly.
 

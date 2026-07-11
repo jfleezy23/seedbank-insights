@@ -90,6 +90,16 @@ test("Dataset Manager previews immutable imports and Advanced Analysis exposes f
   await page.goto("/");
   await page.getByRole("button", { name: "Import spreadsheet" }).click();
   await expect(page.getByRole("heading", { name: "Dataset Manager" })).toBeVisible();
+  await expect(page.getByText("Choose workbooks")).toBeVisible();
+  await expect(page.getByText(/Nothing becomes active until you import reviewed versions/)).toBeVisible();
+  await expect(page.getByText("Relink moved files")).toBeVisible();
+  await expect(page.getByText("Pick what to analyze")).toBeVisible();
+  await expect(page.getByText("Document unknown codes")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Choose workbook files" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Create combined scope" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Workbook sources" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Active analysis scope" })).toBeVisible();
+  await expect(page.getByText(/Advanced: this is where documented local treatment codes/)).toBeVisible();
   await expect(page.getByText("2166")).toBeVisible();
   await expect(page.getByText("Row 35: Missing treatment")).toBeVisible();
   await expect(page.getByText("Scope: Combined latest cohorts")).toBeVisible();

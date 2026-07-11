@@ -23,6 +23,15 @@ Then launch the unpacked packaged app bundle/executable itself. Installer builds
 
 Use Google Drive Desktop to sync the source workbooks locally, then open **Imports → Dataset Manager**. Register one or more `.xlsx` or `.xls` files and review the compatibility preview before importing. Matching content creates no duplicate; changed content creates a new immutable version only after confirmation.
 
+Dataset Manager vocabulary:
+
+- **Choose workbook files** opens one or more locally synced workbook files, remembers their source identity, hashes the content, and builds a compatibility preview. This is the user-facing registration step; it does not change the active analysis scope.
+- **Registered sources** are remembered workbook identities. Use **Check for updates** to compare the synced file against the last imported content hash.
+- **Relink** is for moved, renamed, unavailable, or cloud-only files. It reconnects the remembered source to a local file without changing historical import versions.
+- **Analysis scope** is the active dataset used by the dashboard, Advanced Analysis, Ask, and species research cache. Choose a single imported cohort or explicitly create a combined scope.
+- **Import compatibility preview** shows accepted rows, quarantined rows, warnings, worksheet candidates, duplicate candidates, and parser-refresh needs before anything is committed.
+- **Treatment codebook** is not the glossary. The Glossary explains acronyms for people; the codebook documents unknown tokens for a specific propagule type and reruns formal eligibility.
+
 The app checks:
 
 - file extension
@@ -37,7 +46,7 @@ The app checks:
 
 Import never changes the active analysis scope. Choose an individual scope or explicitly create a combined scope in Dataset Manager. A combined scope can contain only one version per source and is blocked when cross-source natural keys overlap.
 
-Unknown treatment tokens remain descriptive-only. Add a documented propagule-specific mapping in the Treatment Codebook, then preview the source again to rerun eligibility.
+Unknown treatment tokens remain descriptive-only. Add a documented propagule-specific mapping in the Treatment Codebook only when the meaning is known; saving the entry creates a new codebook version and reruns eligibility without changing raw workbook values.
 
 Raw workbook files stay local and should not be committed.
 
