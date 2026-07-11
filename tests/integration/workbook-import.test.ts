@@ -100,14 +100,15 @@ describe("committed PSU-style workbook fixture import", () => {
         pc: null,
         pcRaw: -2,
         pcScale: "invalid",
-        lpc: 1,
+        lpc: null,
         lpcRaw: 5,
-        lpcScale: "percent_0_100"
+        lpcScale: "ambiguous"
       });
       expect(result.issues).toEqual(
         expect.arrayContaining([
           expect.objectContaining({ id: "invalid-pc-score", sourceRows: [3] }),
           expect.objectContaining({ id: "normalized-pc-percentages", sourceRows: [2] })
+          ,expect.objectContaining({ id: "ambiguous-lpc-scale", sourceRows: [3] })
         ])
       );
 

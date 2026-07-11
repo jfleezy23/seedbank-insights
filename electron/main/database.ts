@@ -1,14 +1,20 @@
 import Database from "better-sqlite3";
+import { createHash } from "node:crypto";
 import type { Database as DatabaseType } from "better-sqlite3";
 import { buildDashboardData } from "../../src/core/insights";
 import type {
   DashboardData,
   DataQualityIssue,
+  DatasetState,
   ImportResult,
+  AnalysisScope,
   ParsedObservation,
+  QuarantinedRow,
   SpeciesInsight,
+  TreatmentCodebookEntry,
   TrialRecord
 } from "../../src/core/types";
+import { BUILT_IN_TREATMENT_CODEBOOK, parseTreatment } from "../../src/core/treatments";
 
 export interface AskContext {
   dashboard: DashboardData;
@@ -45,6 +51,11 @@ type BatchRow = {
   species_count: number;
   treatment_count: number;
   warnings_json: string;
+  source_id?: number | null;
+  source_path?: string | null;
+  worksheet_name?: string | null;
+  populated_row_count?: number | null;
+  quarantined_row_count?: number | null;
 };
 
 function textValue(value: unknown): string {
@@ -82,6 +93,12 @@ function batchSummaryFromRow(row: BatchRow): ImportResult["batch"] & { id: numbe
     speciesCount: row.species_count,
     treatmentCount: row.treatment_count,
     warnings: parseJson<string[]>(row.warnings_json, [])
+    ,
+    sourceId: numberOrNull(row.source_id) ?? undefined,
+    sourcePath: nullableText(row.source_path) ?? undefined,
+    worksheetName: nullableText(row.worksheet_name) ?? undefined,
+    populatedRowCount: numberOrNull(row.populated_row_count) ?? undefined,
+    quarantinedRowCount: numberOrNull(row.quarantined_row_count) ?? undefined
   };
 }
 
@@ -98,6 +115,8 @@ function trialFromRow(row: Record<string, unknown>): TrialRecord {
     num: numberOrNull(row.num),
     startDate: nullableText(row.start_date),
     propaguleType: nullableText(row.propagule_type),
+    propaguleTypeRaw: nullableText(row.propagule_type_raw),
+    propaguleTypeCanonical: (nullableText(row.propagule_type_canonical) ?? "unknown") as TrialRecord["propaguleTypeCanonical"],
     ttd: nullableText(row.ttd),
     pc: numberOrNull(row.pc),
     pcRaw: numberOrNull(row.pc_raw),
@@ -132,7 +151,13 @@ function trialFromRow(row: Record<string, unknown>): TrialRecord {
       warmDays: [],
       tokens: [],
       warnings: []
-    })
+    }),
+    analysisEligibility: (nullableText(row.analysis_eligibility) ?? "eligible") as TrialRecord["analysisEligibility"],
+    validationWarnings: parseJson<string[]>(row.validation_warnings_json, []),
+    cohort: nullableText(row.cohort),
+    rawCellValues: parseJson<TrialRecord["rawCellValues"]>(row.raw_cell_values_json, {}),
+    normalizedCellValues: parseJson<TrialRecord["normalizedCellValues"]>(row.normalized_cell_values_json, {}),
+    replicateClassification: (nullableText(row.replicate_classification) ?? "unique") as TrialRecord["replicateClassification"]
   };
 }
 
@@ -181,11 +206,14 @@ export class SeedBankDatabase {
         DROP TABLE IF EXISTS import_batches;
       `);
       this.createSchema();
-      this.db.pragma("user_version = 1");
+      this.db.pragma("user_version = 2");
       this.db.pragma("foreign_keys = ON");
       return;
     }
-    this.createSchema();
+    this.db.transaction(() => {
+      this.createSchema();
+      if (version < 2) this.db.pragma("user_version = 2");
+    })();
   }
 
   private createSchema(): void {
@@ -199,7 +227,12 @@ export class SeedBankDatabase {
         accession_count INTEGER NOT NULL,
         species_count INTEGER NOT NULL,
         treatment_count INTEGER NOT NULL,
-        warnings_json TEXT NOT NULL
+        warnings_json TEXT NOT NULL,
+        source_id INTEGER,
+        source_path TEXT,
+        worksheet_name TEXT,
+        populated_row_count INTEGER,
+        quarantined_row_count INTEGER
       );
 
       CREATE TABLE IF NOT EXISTS trials (
@@ -214,6 +247,8 @@ export class SeedBankDatabase {
         num REAL,
         start_date TEXT,
         propagule_type TEXT,
+        propagule_type_raw TEXT,
+        propagule_type_canonical TEXT,
         ttd TEXT,
         pc REAL,
         pc_raw REAL,
@@ -236,6 +271,12 @@ export class SeedBankDatabase {
         pcd TEXT,
         notes TEXT,
         treatment_components_json TEXT NOT NULL,
+        analysis_eligibility TEXT NOT NULL DEFAULT 'eligible',
+        validation_warnings_json TEXT NOT NULL DEFAULT '[]',
+        cohort TEXT,
+        raw_cell_values_json TEXT NOT NULL DEFAULT '{}',
+        normalized_cell_values_json TEXT NOT NULL DEFAULT '{}',
+        replicate_classification TEXT NOT NULL DEFAULT 'unique',
         PRIMARY KEY(import_batch_id, id),
         FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
       );
@@ -275,11 +316,63 @@ export class SeedBankDatabase {
         FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
       );
 
+      CREATE TABLE IF NOT EXISTS workbook_sources (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        label TEXT NOT NULL,
+        canonical_path TEXT NOT NULL UNIQUE,
+        created_at TEXT NOT NULL,
+        last_seen_at TEXT
+      );
+
+      CREATE TABLE IF NOT EXISTS import_quarantine (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        import_batch_id INTEGER NOT NULL,
+        source_row INTEGER NOT NULL,
+        worksheet_name TEXT NOT NULL,
+        reasons_json TEXT NOT NULL,
+        row_json TEXT NOT NULL,
+        FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS analysis_scopes (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS analysis_scope_batches (
+        scope_id INTEGER NOT NULL,
+        import_batch_id INTEGER NOT NULL,
+        PRIMARY KEY(scope_id, import_batch_id),
+        FOREIGN KEY(scope_id) REFERENCES analysis_scopes(id) ON DELETE CASCADE,
+        FOREIGN KEY(import_batch_id) REFERENCES import_batches(id) ON DELETE CASCADE
+      );
+
+      CREATE TABLE IF NOT EXISTS treatment_codebook (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        version INTEGER NOT NULL,
+        propagule_type TEXT NOT NULL,
+        token TEXT NOT NULL,
+        label TEXT NOT NULL,
+        meaning TEXT NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1,
+        built_in INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE IF NOT EXISTS app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+
     `);
     this.ensureObservationImportBatchId();
     this.ensureTrialFamilyColumn();
     this.ensureTrialScoreColumns();
     this.ensureDataQualityMetadataColumn();
+    this.ensureDatasetColumns();
+    this.migrateLegacySources();
+    this.seedTreatmentCodebook();
+    this.refreshTreatmentEligibility();
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_observations_import_batch_id
         ON observations(import_batch_id);
@@ -379,6 +472,117 @@ export class SeedBankDatabase {
     this.db.exec("ALTER TABLE data_quality_issues ADD COLUMN metadata_json TEXT NOT NULL DEFAULT '{}';");
   }
 
+  private ensureDatasetColumns(): void {
+    const ensureColumns = (table: string, additions: Array<[string, string]>): void => {
+      const columns = new Set(
+        (this.db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>).map((column) => column.name)
+      );
+      for (const [name, definition] of additions) {
+        if (!columns.has(name)) this.db.exec(`ALTER TABLE ${table} ADD COLUMN ${name} ${definition};`);
+      }
+    };
+    ensureColumns("import_batches", [
+      ["source_id", "INTEGER"],
+      ["source_path", "TEXT"],
+      ["worksheet_name", "TEXT"],
+      ["populated_row_count", "INTEGER"],
+      ["quarantined_row_count", "INTEGER"]
+    ]);
+    ensureColumns("trials", [
+      ["propagule_type_raw", "TEXT"],
+      ["propagule_type_canonical", "TEXT"],
+      ["analysis_eligibility", "TEXT NOT NULL DEFAULT 'eligible'"],
+      ["validation_warnings_json", "TEXT NOT NULL DEFAULT '[]'"],
+      ["cohort", "TEXT"],
+      ["raw_cell_values_json", "TEXT NOT NULL DEFAULT '{}'"],
+      ["normalized_cell_values_json", "TEXT NOT NULL DEFAULT '{}'"],
+      ["replicate_classification", "TEXT NOT NULL DEFAULT 'unique'"]
+    ]);
+    this.db.exec(`
+      UPDATE trials SET propagule_type_raw = propagule_type
+      WHERE propagule_type_raw IS NULL;
+      UPDATE trials SET propagule_type_canonical = CASE LOWER(TRIM(COALESCE(propagule_type_raw, propagule_type, '')))
+        WHEN 's' THEN 'seed'
+        WHEN 'seed' THEN 'seed'
+        WHEN 'sc' THEN 'stem_cutting'
+        WHEN 'cs' THEN 'stem_cutting'
+        WHEN 'stem cutting' THEN 'stem_cutting'
+        WHEN 'cutting' THEN 'stem_cutting'
+        WHEN 'd' THEN 'division'
+        WHEN 'division' THEN 'division'
+        ELSE 'unknown'
+      END
+      WHERE propagule_type_canonical IS NULL OR propagule_type_canonical = '';
+    `);
+  }
+
+  private seedTreatmentCodebook(): void {
+    const insert = this.db.prepare(
+      `INSERT INTO treatment_codebook (
+        version, propagule_type, token, label, meaning, active, built_in
+      ) VALUES (?, ?, ?, ?, ?, ?, 1)`
+    );
+    const tx = this.db.transaction(() => {
+      for (const entry of BUILT_IN_TREATMENT_CODEBOOK) {
+        const existing = this.db
+          .prepare("SELECT id FROM treatment_codebook WHERE built_in = 1 AND propagule_type = ? AND token = ?")
+          .get(entry.propaguleType, entry.token);
+        if (existing) continue;
+        insert.run(entry.version, entry.propaguleType, entry.token, entry.label, entry.meaning, entry.active ? 1 : 0);
+      }
+    });
+    tx();
+  }
+
+  private refreshTreatmentEligibility(): void {
+    const codebook = this.getTreatmentCodebook();
+    const rows = this.db
+      .prepare(
+        `SELECT id, import_batch_id, treatment, propagule_type_canonical, validation_warnings_json
+         FROM trials`
+      )
+      .all() as Array<Record<string, unknown>>;
+    const update = this.db.prepare(
+      `UPDATE trials SET treatment_components_json = ?, analysis_eligibility = ?, validation_warnings_json = ?
+       WHERE id = ? AND import_batch_id = ?`
+    );
+    const tx = this.db.transaction(() => {
+      for (const row of rows) {
+        const parsed = parseTreatment(
+          row.treatment,
+          (nullableText(row.propagule_type_canonical) ?? "unknown") as TrialRecord["propaguleTypeCanonical"],
+          codebook
+        );
+        const preservedWarnings = parseJson<string[]>(row.validation_warnings_json, []).filter(
+          (warning) => !warning.startsWith("Unmapped treatment token:") && warning !== "Missing treatment value"
+        );
+        update.run(
+          JSON.stringify(parsed),
+          parsed.warnings.length ? "descriptive_only" : "eligible",
+          JSON.stringify([...preservedWarnings, ...parsed.warnings]),
+          row.id,
+          row.import_batch_id
+        );
+      }
+    });
+    tx();
+  }
+
+  private migrateLegacySources(): void {
+    const rows = this.db
+      .prepare("SELECT DISTINCT filename FROM import_batches WHERE source_id IS NULL")
+      .all() as Array<{ filename: string }>;
+    for (const row of rows) {
+      const canonicalPath = `legacy://${row.filename}`;
+      const sourceId = this.ensureSource(canonicalPath, row.filename);
+      this.db
+        .prepare(
+          "UPDATE import_batches SET source_id = ?, source_path = COALESCE(source_path, ?) WHERE source_id IS NULL AND filename = ?"
+        )
+        .run(sourceId, canonicalPath, row.filename);
+    }
+  }
+
   saveSpeciesInsights(importBatchId: number, insights: SpeciesInsight[]): void {
     const tx = this.db.transaction(() => {
       this.db
@@ -401,13 +605,38 @@ export class SeedBankDatabase {
     tx();
   }
 
+  private ensureSource(canonicalPath: string, label: string): number {
+    const existing = this.db
+      .prepare("SELECT id FROM workbook_sources WHERE canonical_path = ?")
+      .get(canonicalPath) as { id: number } | undefined;
+    const now = new Date().toISOString();
+    if (existing) {
+      this.db.prepare("UPDATE workbook_sources SET label = ?, last_seen_at = ? WHERE id = ?").run(label, now, existing.id);
+      return existing.id;
+    }
+    return Number(
+      this.db
+        .prepare(
+          "INSERT INTO workbook_sources (label, canonical_path, created_at, last_seen_at) VALUES (?, ?, ?, ?)"
+        )
+        .run(label, canonicalPath, now, now).lastInsertRowid
+    );
+  }
+
   saveImport(result: ImportResult): DashboardData {
+    const sourcePath = result.batch.sourcePath ?? result.batch.filename;
+    const sourceId = result.batch.sourceId ?? this.ensureSource(sourcePath, result.batch.filename);
+    const existing = this.db
+      .prepare("SELECT id FROM import_batches WHERE source_id = ? AND workbook_hash = ? ORDER BY id DESC LIMIT 1")
+      .get(sourceId, result.batch.workbookHash) as { id: number } | undefined;
+    if (existing) return this.getDashboard(existing.id);
     const tx = this.db.transaction(() => {
       const batchStmt = this.db.prepare(`
         INSERT INTO import_batches (
           filename, imported_at, workbook_hash, row_count, accession_count,
-          species_count, treatment_count, warnings_json
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+          species_count, treatment_count, warnings_json, source_id, source_path,
+          worksheet_name, populated_row_count, quarantined_row_count
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       const batchInfo = batchStmt.run(
         result.batch.filename,
@@ -417,23 +646,32 @@ export class SeedBankDatabase {
         result.batch.accessionCount,
         result.batch.speciesCount,
         result.batch.treatmentCount,
-        JSON.stringify(result.batch.warnings)
+        JSON.stringify(result.batch.warnings),
+        sourceId,
+        sourcePath,
+        result.batch.worksheetName ?? null,
+        result.batch.populatedRowCount ?? result.batch.rowCount,
+        result.batch.quarantinedRowCount ?? 0
       );
       const batchId = Number(batchInfo.lastInsertRowid);
 
       const trialStmt = this.db.prepare(`
         INSERT INTO trials (
           id, import_batch_id, source_row, p_accession, source_accession,
-          species, family, treatment, num, start_date, propagule_type, ttd, pc, pc_raw, pc_scale,
+          species, family, treatment, num, start_date, propagule_type, propagule_type_raw,
+          propagule_type_canonical, ttd, pc, pc_raw, pc_scale,
           ced, wsed, csed, liner_start, liner_ttd, lpc, lpc_raw, lpc_scale, four_start,
           four_ttd, four_pc, four_pc_raw, four_pc_scale, location, status, pcd, notes,
-          treatment_components_json
+          treatment_components_json, analysis_eligibility, validation_warnings_json, cohort,
+          raw_cell_values_json, normalized_cell_values_json, replicate_classification
         ) VALUES (
           @id, @importBatchId, @sourceRow, @pAccession, @sourceAccession,
-          @species, @family, @treatment, @num, @startDate, @propaguleType, @ttd, @pc, @pcRaw, @pcScale,
+          @species, @family, @treatment, @num, @startDate, @propaguleType, @propaguleTypeRaw,
+          @propaguleTypeCanonical, @ttd, @pc, @pcRaw, @pcScale,
           @ced, @wsed, @csed, @linerStart, @linerTtd, @lpc, @lpcRaw, @lpcScale, @fourStart,
           @fourTtd, @fourPc, @fourPcRaw, @fourPcScale, @location, @status, @pcd, @notes,
-          @treatmentComponentsJson
+          @treatmentComponentsJson, @analysisEligibility, @validationWarningsJson, @cohort,
+          @rawCellValuesJson, @normalizedCellValuesJson, @replicateClassification
         )
       `);
 
@@ -448,7 +686,15 @@ export class SeedBankDatabase {
           lpcScale: trial.lpcScale ?? (trial.lpc === null ? null : "ordinal_0_5"),
           fourPcRaw: trial.fourPcRaw ?? trial.fourPc,
           fourPcScale: trial.fourPcScale ?? (trial.fourPc === null ? null : "ordinal_0_5"),
-          treatmentComponentsJson: JSON.stringify(trial.treatmentComponents)
+          propaguleTypeRaw: trial.propaguleTypeRaw ?? trial.propaguleType,
+          propaguleTypeCanonical: trial.propaguleTypeCanonical ?? "unknown",
+          treatmentComponentsJson: JSON.stringify(trial.treatmentComponents),
+          analysisEligibility: trial.analysisEligibility ?? "eligible",
+          validationWarningsJson: JSON.stringify(trial.validationWarnings ?? []),
+          cohort: trial.cohort ?? null
+          ,rawCellValuesJson: JSON.stringify(trial.rawCellValues ?? {})
+          ,normalizedCellValuesJson: JSON.stringify(trial.normalizedCellValues ?? {})
+          ,replicateClassification: trial.replicateClassification ?? "unique"
         });
       }
 
@@ -480,11 +726,298 @@ export class SeedBankDatabase {
         issueStmt.run(batchId, issue.severity, issue.title, issue.detail, issue.affectedRows, JSON.stringify(issue));
       }
 
+      const quarantineStmt = this.db.prepare(
+        `INSERT INTO import_quarantine (
+          import_batch_id, source_row, worksheet_name, reasons_json, row_json
+        ) VALUES (?, ?, ?, ?, ?)`
+      );
+      for (const row of result.quarantinedRows ?? []) {
+        quarantineStmt.run(
+          batchId,
+          row.sourceRow,
+          row.worksheetName,
+          JSON.stringify(row.reasons),
+          JSON.stringify(row)
+        );
+      }
+
+      const scopeId = Number(
+        this.db
+          .prepare("INSERT INTO analysis_scopes (name, created_at) VALUES (?, ?)")
+          .run(result.batch.filename, result.batch.importedAt).lastInsertRowid
+      );
+      this.db
+        .prepare("INSERT INTO analysis_scope_batches (scope_id, import_batch_id) VALUES (?, ?)")
+        .run(scopeId, batchId);
+      const active = this.db.prepare("SELECT value FROM app_state WHERE key = 'active_scope_id'").get();
+      if (!active) {
+        this.db
+          .prepare("INSERT INTO app_state (key, value) VALUES ('active_scope_id', ?)")
+          .run(String(scopeId));
+      }
+
       return batchId;
     });
 
     const batchId = tx();
     return this.getDashboard(batchId);
+  }
+
+  getTreatmentCodebook(): TreatmentCodebookEntry[] {
+    return (
+      this.db
+        .prepare(
+          `SELECT id, version, propagule_type, token, label, meaning, active, built_in
+           FROM treatment_codebook ORDER BY version, propagule_type, token`
+        )
+        .all() as Array<Record<string, unknown>>
+    ).map((row) => ({
+      id: Number(row.id),
+      version: Number(row.version),
+      propaguleType: row.propagule_type as TreatmentCodebookEntry["propaguleType"],
+      token: textValue(row.token),
+      label: textValue(row.label),
+      meaning: textValue(row.meaning),
+      active: Boolean(row.active),
+      builtIn: Boolean(row.built_in)
+    }));
+  }
+
+  saveTreatmentCodebookEntry(entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">): TreatmentCodebookEntry[] {
+    const version = Number(
+      (this.db.prepare("SELECT COALESCE(MAX(version), 1) AS version FROM treatment_codebook").get() as { version: number })
+        .version
+    ) + 1;
+    this.db
+      .prepare(
+        `INSERT INTO treatment_codebook (
+          version, propagule_type, token, label, meaning, active, built_in
+        ) VALUES (?, ?, ?, ?, ?, ?, 0)`
+      )
+      .run(
+        version,
+        entry.propaguleType,
+        entry.token.trim().toUpperCase(),
+        entry.label.trim(),
+        entry.meaning.trim(),
+        entry.active ? 1 : 0
+      );
+    this.refreshTreatmentEligibility();
+    return this.getTreatmentCodebook();
+  }
+
+  private scopeFromRow(row: { id: number; name: string; created_at: string }): AnalysisScope {
+    const batches = this.db
+      .prepare(
+        `SELECT b.id, b.workbook_hash
+         FROM analysis_scope_batches sb
+         JOIN import_batches b ON b.id = sb.import_batch_id
+         WHERE sb.scope_id = ?
+         ORDER BY b.id`
+      )
+      .all(row.id) as Array<{ id: number; workbook_hash: string }>;
+    const hashes = batches.map((batch) => batch.workbook_hash);
+    return {
+      id: row.id,
+      name: row.name,
+      batchIds: batches.map((batch) => batch.id),
+      workbookHashes: hashes,
+      scopeHash: createHash("sha256").update(hashes.slice().sort().join("|")).digest("hex"),
+      isCombined: batches.length > 1,
+      createdAt: row.created_at
+    };
+  }
+
+  getDatasetState(): DatasetState {
+    const sourceRows = this.db
+      .prepare(
+        `SELECT s.*,
+          (SELECT id FROM import_batches b WHERE b.source_id = s.id ORDER BY b.id DESC LIMIT 1) AS latest_batch_id,
+          (SELECT workbook_hash FROM import_batches b WHERE b.source_id = s.id ORDER BY b.id DESC LIMIT 1) AS latest_hash
+         FROM workbook_sources s ORDER BY s.label`
+      )
+      .all() as Array<Record<string, unknown>>;
+    const sources = sourceRows.map((row) => ({
+      id: Number(row.id),
+      label: textValue(row.label),
+      canonicalPath: textValue(row.canonical_path),
+      createdAt: textValue(row.created_at),
+      lastSeenAt: nullableText(row.last_seen_at),
+      latestBatchId: numberOrNull(row.latest_batch_id),
+      latestWorkbookHash: nullableText(row.latest_hash),
+      available: true
+    }));
+    const scopes = (
+      this.db.prepare("SELECT id, name, created_at FROM analysis_scopes ORDER BY id DESC").all() as Array<{
+        id: number;
+        name: string;
+        created_at: string;
+      }>
+    ).map((row) => this.scopeFromRow(row));
+    const active = this.db.prepare("SELECT value FROM app_state WHERE key = 'active_scope_id'").get() as
+      | { value: string }
+      | undefined;
+    return {
+      sources,
+      scopes,
+      activeScopeId: active ? Number(active.value) : null
+    };
+  }
+
+  relinkSource(sourceId: number, canonicalPath: string, label: string): DatasetState {
+    const source = this.db.prepare("SELECT id FROM workbook_sources WHERE id = ?").get(sourceId);
+    if (!source) throw new Error("Workbook source was not found.");
+    const collision = this.db
+      .prepare("SELECT id FROM workbook_sources WHERE canonical_path = ? AND id <> ?")
+      .get(canonicalPath, sourceId);
+    if (collision) throw new Error("That file is already registered as another workbook source.");
+    this.db
+      .prepare("UPDATE workbook_sources SET canonical_path = ?, label = ?, last_seen_at = ? WHERE id = ?")
+      .run(canonicalPath, label, new Date().toISOString(), sourceId);
+    this.db.prepare("UPDATE import_batches SET source_path = ? WHERE source_id = ?").run(canonicalPath, sourceId);
+    return this.getDatasetState();
+  }
+
+  createScope(name: string, batchIds: number[]): AnalysisScope {
+    const uniqueBatchIds = [...new Set(batchIds)];
+    if (!uniqueBatchIds.length) throw new Error("Select at least one workbook version.");
+    const sourceRows = this.db
+      .prepare(
+        `SELECT id, source_id FROM import_batches WHERE id IN (${uniqueBatchIds.map(() => "?").join(",")})`
+      )
+      .all(...uniqueBatchIds) as Array<{ id: number; source_id: number | null }>;
+    if (sourceRows.length !== uniqueBatchIds.length) throw new Error("One or more workbook versions no longer exist.");
+    const sourceIds = sourceRows.map((row) => row.source_id).filter((id): id is number => id !== null);
+    if (new Set(sourceIds).size !== sourceIds.length) {
+      throw new Error("An analysis scope can contain only one version of each workbook source.");
+    }
+    if (uniqueBatchIds.length > 1) {
+      const overlap = this.db
+        .prepare(
+          `SELECT p_accession, source_accession, species, treatment, COUNT(DISTINCT import_batch_id) AS batches
+           FROM trials
+           WHERE import_batch_id IN (${uniqueBatchIds.map(() => "?").join(",")})
+           GROUP BY p_accession, source_accession, species, treatment
+           HAVING batches > 1
+           LIMIT 1`
+        )
+        .get(...uniqueBatchIds);
+      if (overlap) throw new Error("Selected workbook versions contain overlapping trial keys; resolve the overlap first.");
+    }
+    const scopeId = Number(
+      this.db
+        .prepare("INSERT INTO analysis_scopes (name, created_at) VALUES (?, ?)")
+        .run(name.trim() || "Combined analysis", new Date().toISOString()).lastInsertRowid
+    );
+    const insert = this.db.prepare(
+      "INSERT INTO analysis_scope_batches (scope_id, import_batch_id) VALUES (?, ?)"
+    );
+    const tx = this.db.transaction(() => uniqueBatchIds.forEach((batchId) => insert.run(scopeId, batchId)));
+    tx();
+    return this.scopeFromRow(
+      this.db.prepare("SELECT id, name, created_at FROM analysis_scopes WHERE id = ?").get(scopeId) as {
+        id: number;
+        name: string;
+        created_at: string;
+      }
+    );
+  }
+
+  setActiveScope(scopeId: number): DashboardData {
+    const scope = this.db.prepare("SELECT id FROM analysis_scopes WHERE id = ?").get(scopeId);
+    if (!scope) throw new Error("Analysis scope was not found.");
+    this.db
+      .prepare(
+        `INSERT INTO app_state (key, value) VALUES ('active_scope_id', ?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+      )
+      .run(String(scopeId));
+    return this.getDashboardForScope(scopeId);
+  }
+
+  getActiveDashboard(): DashboardData {
+    const active = this.getDatasetState().activeScopeId;
+    return active ? this.getDashboardForScope(active) : this.getDashboard();
+  }
+
+  getTrialsForScope(scopeId?: number): TrialRecord[] {
+    const resolvedScopeId = scopeId ?? this.getDatasetState().activeScopeId;
+    if (!resolvedScopeId) return [];
+    const scopeRow = this.db
+      .prepare("SELECT id, name, created_at FROM analysis_scopes WHERE id = ?")
+      .get(resolvedScopeId) as { id: number; name: string; created_at: string } | undefined;
+    if (!scopeRow) return [];
+    const batchIds = this.scopeFromRow(scopeRow).batchIds;
+    if (!batchIds.length) return [];
+    const placeholders = batchIds.map(() => "?").join(",");
+    return (
+      this.db
+        .prepare(
+          `SELECT t.*, b.filename AS source_filename, b.workbook_hash, b.source_id, b.worksheet_name
+           FROM trials t JOIN import_batches b ON b.id = t.import_batch_id
+           WHERE t.import_batch_id IN (${placeholders}) ORDER BY t.import_batch_id, t.source_row`
+        )
+        .all(...batchIds) as Array<Record<string, unknown>>
+    ).map((row) => ({
+      ...trialFromRow(row),
+      sourceId: numberOrNull(row.source_id) ?? undefined,
+      sourceFilename: nullableText(row.source_filename) ?? undefined,
+      sourceWorksheet: nullableText(row.worksheet_name) ?? undefined,
+      workbookHash: nullableText(row.workbook_hash) ?? undefined
+    }));
+  }
+
+  getTreatmentCodebookVersion(): number {
+    return Number(
+      (this.db.prepare("SELECT COALESCE(MAX(version), 1) AS version FROM treatment_codebook").get() as { version: number })
+        .version
+    );
+  }
+
+  getDashboardForScope(scopeId: number): DashboardData {
+    const scopeRow = this.db
+      .prepare("SELECT id, name, created_at FROM analysis_scopes WHERE id = ?")
+      .get(scopeId) as { id: number; name: string; created_at: string } | undefined;
+    if (!scopeRow) return buildDashboardData([], [], null);
+    const scope = this.scopeFromRow(scopeRow);
+    const placeholders = scope.batchIds.map(() => "?").join(",");
+    const batchRows = this.db
+      .prepare(`SELECT * FROM import_batches WHERE id IN (${placeholders}) ORDER BY id`)
+      .all(...scope.batchIds) as BatchRow[];
+    const trialRows = this.db
+      .prepare(
+        `SELECT t.*, b.filename AS source_filename, b.workbook_hash, b.source_id, b.worksheet_name
+         FROM trials t JOIN import_batches b ON b.id = t.import_batch_id
+         WHERE t.import_batch_id IN (${placeholders}) ORDER BY t.import_batch_id, t.source_row`
+      )
+      .all(...scope.batchIds) as Array<Record<string, unknown>>;
+    const observationRows = this.db
+      .prepare(
+        `SELECT * FROM observations WHERE import_batch_id IN (${placeholders})
+         ORDER BY import_batch_id, id`
+      )
+      .all(...scope.batchIds) as Array<Record<string, unknown>>;
+    const issueRows = this.db
+      .prepare(
+        `SELECT * FROM data_quality_issues WHERE import_batch_id IN (${placeholders})
+         ORDER BY import_batch_id, id`
+      )
+      .all(...scope.batchIds) as Array<Record<string, unknown>>;
+    const trials = trialRows.map((row) => ({
+      ...trialFromRow(row),
+      sourceId: numberOrNull(row.source_id) ?? undefined,
+      sourceFilename: nullableText(row.source_filename) ?? undefined,
+      sourceWorksheet: nullableText(row.worksheet_name) ?? undefined,
+      workbookHash: nullableText(row.workbook_hash) ?? undefined
+    }));
+    const dashboard = buildDashboardData(
+      trials,
+      observationRows.map(observationFromRow),
+      batchRows.length === 1 ? batchSummaryFromRow(batchRows[0]) : batchSummaryFromRow(batchRows[batchRows.length - 1]),
+      issueRows.map(issueFromRow),
+      []
+    );
+    return { ...dashboard, batches: batchRows.map(batchSummaryFromRow), scope };
   }
 
   getImportResult(batchId?: number): ImportResult | null {
@@ -504,6 +1037,9 @@ export class SeedBankDatabase {
     const trialRows = this.db
       .prepare("SELECT * FROM trials WHERE import_batch_id = ? ORDER BY source_row")
       .all(batch) as Array<Record<string, unknown>>;
+    const quarantineRows = this.db
+      .prepare("SELECT * FROM import_quarantine WHERE import_batch_id = ? ORDER BY source_row")
+      .all(batch) as Array<Record<string, unknown>>;
 
     const observationRows = this.db
       .prepare("SELECT * FROM observations WHERE import_batch_id = ? ORDER BY id")
@@ -517,7 +1053,19 @@ export class SeedBankDatabase {
       batch: batchSummaryFromRow(batchRow),
       trials: trialRows.map(trialFromRow),
       observations: observationRows.map(observationFromRow),
-      issues: issueRows.map(issueFromRow)
+      issues: issueRows.map(issueFromRow),
+      quarantinedRows: quarantineRows.map<QuarantinedRow>((row) => {
+        const payload = parseJson<Partial<QuarantinedRow>>(row.row_json, {});
+        return {
+          sourceRow: Number(row.source_row),
+          worksheetName: textValue(row.worksheet_name),
+          reasons: parseJson<string[]>(row.reasons_json, []),
+          pAccession: payload.pAccession ?? null,
+          sourceAccession: payload.sourceAccession ?? null,
+          species: payload.species ?? null,
+          treatment: payload.treatment ?? null
+        };
+      })
     };
   }
 

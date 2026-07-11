@@ -1,4 +1,5 @@
 import { app, BrowserWindow, dialog, ipcMain, safeStorage } from "electron";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { SeedBankDatabase } from "./database";
@@ -8,14 +9,18 @@ import {
   suggestHeaderAliases
 } from "./openai-insights";
 import { researchSpeciesWithExternalSources, summarizeSpeciesResearchCacheStatus } from "./species-research";
-import { importWorkbook, inspectWorkbookHeaders } from "../../src/core/workbook";
+import { importWorkbook, inspectWorkbookCandidates, inspectWorkbookHeaders } from "../../src/core/workbook";
+import { buildAdvancedAnalysisRows, buildAdvancedComparisons } from "../../src/core/statistics";
 import type {
   AiInsightStatus,
   DashboardData,
+  DatasetState,
+  ImportPreview,
   ImportBatchSummary,
   ImportResult,
   SpeciesResearchCacheStatus,
-  SpeciesResearchResult
+  SpeciesResearchResult,
+  TreatmentCodebookEntry
 } from "../../src/core/types";
 
 let mainWindow: BrowserWindow | null = null;
@@ -23,6 +28,7 @@ let splashWindow: BrowserWindow | null = null;
 let database: SeedBankDatabase | null = null;
 const speciesResearchCache = new Map<string, unknown>();
 const speciesResearchInFlight = new Map<string, Promise<SpeciesResearchResult>>();
+const pendingImports = new Map<string, ImportResult>();
 const SPECIES_RESEARCH_CACHE_VERSION = "species-research-v6";
 const MAX_WORKBOOK_BYTES = 25 * 1024 * 1024;
 const configuredSplashMs = Number.parseInt(process.env.SEEDBANK_SPLASH_MIN_MS ?? "1100", 10);
@@ -96,7 +102,12 @@ function speciesCacheSlug(species: string): string {
 }
 
 function speciesResearchCacheKey(batch: ImportBatchSummary, species: string): string {
-  return `${batch.workbookHash.slice(0, 16)}-${speciesCacheSlug(species)}`;
+  const dataset = getDatabase().getDatasetState();
+  const activeScope = dataset.scopes.find((scope) => scope.id === dataset.activeScopeId);
+  const identity = activeScope && batch.id && activeScope.batchIds.includes(batch.id)
+    ? activeScope.scopeHash
+    : batch.workbookHash;
+  return `${identity.slice(0, 16)}-${speciesCacheSlug(species)}`;
 }
 
 function speciesResearchCachePath(batch: ImportBatchSummary, species: string): string {
@@ -133,7 +144,9 @@ async function readSpeciesResearchCache(
 }
 
 async function getSpeciesResearchCacheStatus(batchId?: number): Promise<SpeciesResearchCacheStatus> {
-  const dashboard = getDatabase().getDashboard(batchId);
+  const database = getDatabase();
+  const active = database.getDatasetState().activeScopeId;
+  const dashboard = active ? database.getDashboardForScope(active) : database.getDashboard(batchId);
   const batch = dashboard.batch;
   if (!batch?.id) {
     return {
@@ -146,10 +159,10 @@ async function getSpeciesResearchCacheStatus(batchId?: number): Promise<SpeciesR
     };
   }
 
-  const importResult = getDatabase().getImportResult(batch.id);
+  const scopedTrials = active ? database.getTrialsForScope(active) : database.getImportResult(batch.id)?.trials ?? [];
   return summarizeSpeciesResearchCacheStatus({
     batch,
-    species: (importResult?.trials ?? []).map((trial) => trial.species),
+    species: scopedTrials.map((trial) => trial.species),
     cacheVersion: SPECIES_RESEARCH_CACHE_VERSION,
     readCache: readSpeciesResearchCache
   });
@@ -168,6 +181,9 @@ async function writeSpeciesResearchCache(
         version: SPECIES_RESEARCH_CACHE_VERSION,
         cachedAt: new Date().toISOString(),
         workbookHash: batch.workbookHash,
+        analysisScopeHash:
+          getDatabase().getDatasetState().scopes.find((scope) => scope.id === getDatabase().getDatasetState().activeScopeId)
+            ?.scopeHash ?? batch.workbookHash,
         batchFilename: batch.filename,
         species,
         result
@@ -498,17 +514,46 @@ async function generateSpeciesInsightsForBatch({
 }
 
 async function importWorkbookWithOptionalAiPrep(filePath: string): Promise<ImportResult> {
+  const codebook = getDatabase().getTreatmentCodebook();
+  const baseOptions = { codebook, sourcePath: path.resolve(filePath) };
   const apiKey = loadOpenAiKey();
-  if (!apiKey) return importWorkbook(filePath);
+  if (!apiKey) return importWorkbook(filePath, baseOptions);
   const profile = await inspectWorkbookHeaders(filePath);
-  if (!profile.missingHeaders.length) return importWorkbook(filePath);
+  if (!profile.missingHeaders.length) return importWorkbook(filePath, baseOptions);
   try {
     const headerAliases = await suggestHeaderAliases({ apiKey, profile });
-    return importWorkbook(filePath, { headerAliases });
+    return importWorkbook(filePath, { ...baseOptions, headerAliases });
   } catch (error) {
     console.warn(`OpenAI header mapping failed; falling back to deterministic import: ${sanitizeErrorMessage(error)}`);
-    return importWorkbook(filePath);
+    return importWorkbook(filePath, baseOptions);
   }
+}
+
+async function previewWorkbook(filePath: string): Promise<ImportPreview> {
+  assertWorkbookPath(filePath);
+  const [result, candidates] = await Promise.all([
+    importWorkbookWithOptionalAiPrep(filePath),
+    inspectWorkbookCandidates(filePath)
+  ]);
+  const token = randomUUID();
+  pendingImports.set(token, result);
+  return {
+    token,
+    sourcePath: path.resolve(filePath),
+    filename: result.batch.filename,
+    workbookHash: result.batch.workbookHash,
+    candidates,
+    worksheetName: result.batch.worksheetName ?? candidates[0]?.worksheetName ?? "",
+    populatedRows: result.batch.populatedRowCount ?? result.batch.rowCount,
+    acceptedRows: result.batch.rowCount,
+    quarantinedRows: result.quarantinedRows ?? [],
+    issues: result.issues,
+    duplicateCandidates: result.trials
+      .filter((trial) => trial.replicateClassification === "ambiguous_duplicate")
+      .map((trial) => trial.sourceRow),
+    unchangedSourceId:
+      getDatabase().getDatasetState().sources.find((source) => source.latestWorkbookHash === result.batch.workbookHash)?.id ?? null
+  };
 }
 
 function assertWorkbookPath(filePath: string): void {
@@ -523,7 +568,123 @@ function assertWorkbookPath(filePath: string): void {
   }
 }
 
-ipcMain.handle("dashboard:get", () => withOpenAiStatus(getDatabase().getDashboard()));
+function csvValue(value: unknown): string {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function csvFromRows(rows: Array<Record<string, unknown>>): string {
+  if (!rows.length) return "";
+  const headers = Object.keys(rows[0]);
+  return [headers.join(","), ...rows.map((row) => headers.map((header) => csvValue(row[header])).join(","))].join("\r\n");
+}
+
+ipcMain.handle("dashboard:get", () => withOpenAiStatus(getDatabase().getActiveDashboard()));
+
+ipcMain.handle("dataset:get", (): DatasetState => getDatabase().getDatasetState());
+
+ipcMain.handle("dataset:previewSelect", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openFile", "multiSelections"],
+    filters: [{ name: "Spreadsheets", extensions: ["xlsx", "xls"] }]
+  });
+  if (result.canceled) return [];
+  return Promise.all(result.filePaths.map(previewWorkbook));
+});
+
+ipcMain.handle("dataset:checkUpdate", async (_event, sourceId: unknown) => {
+  const id = Number(sourceId);
+  const source = getDatabase().getDatasetState().sources.find((candidate) => candidate.id === id);
+  if (!source) throw new Error("Workbook source was not found.");
+  if (!fs.existsSync(source.canonicalPath)) throw new Error("The synced workbook is unavailable or cloud-only. Relink it before importing.");
+  return previewWorkbook(source.canonicalPath);
+});
+
+ipcMain.handle("dataset:relink", async (_event, sourceId: unknown) => {
+  const id = Number(sourceId);
+  const source = getDatabase().getDatasetState().sources.find((candidate) => candidate.id === id);
+  if (!source) throw new Error("Workbook source was not found.");
+  const selected = await dialog.showOpenDialog({
+    properties: ["openFile"],
+    filters: [{ name: "Spreadsheets", extensions: ["xlsx", "xls"] }]
+  });
+  if (selected.canceled || !selected.filePaths[0]) return null;
+  assertWorkbookPath(selected.filePaths[0]);
+  const resolved = path.resolve(selected.filePaths[0]);
+  getDatabase().relinkSource(id, resolved, path.basename(resolved));
+  return previewWorkbook(resolved);
+});
+
+ipcMain.handle("dataset:commitPreviews", async (_event, tokens: unknown) => {
+  if (!Array.isArray(tokens) || !tokens.length) throw new Error("No import previews were selected.");
+  for (const rawToken of tokens) {
+    const token = String(rawToken);
+    const result = pendingImports.get(token);
+    if (!result) throw new Error("An import preview expired. Preview the workbook again.");
+    getDatabase().saveImport(result);
+    pendingImports.delete(token);
+  }
+  speciesResearchCache.clear();
+  return {
+    dataset: getDatabase().getDatasetState(),
+    dashboard: withOpenAiStatus(getDatabase().getActiveDashboard())
+  };
+});
+
+ipcMain.handle("dataset:createScope", (_event, name: unknown, batchIds: unknown) => {
+  if (!Array.isArray(batchIds)) throw new Error("Select workbook versions for the scope.");
+  const scope = getDatabase().createScope(String(name ?? "Combined analysis"), batchIds.map(Number));
+  return {
+    dataset: getDatabase().getDatasetState(),
+    dashboard: withOpenAiStatus(getDatabase().setActiveScope(scope.id))
+  };
+});
+
+ipcMain.handle("dataset:setScope", (_event, scopeId: unknown) => ({
+  dataset: getDatabase().getDatasetState(),
+  dashboard: withOpenAiStatus(getDatabase().setActiveScope(Number(scopeId)))
+}));
+
+ipcMain.handle("codebook:get", (): TreatmentCodebookEntry[] => getDatabase().getTreatmentCodebook());
+ipcMain.handle("codebook:save", (_event, entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">) =>
+  getDatabase().saveTreatmentCodebookEntry(entry)
+);
+
+ipcMain.handle("analysis:export", async () => {
+  const database = getDatabase();
+  const dataset = database.getDatasetState();
+  const scope = dataset.scopes.find((candidate) => candidate.id === dataset.activeScopeId);
+  if (!scope) throw new Error("Select an analysis scope before exporting.");
+  const target = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"] });
+  if (target.canceled || !target.filePaths[0]) return null;
+  const directory = target.filePaths[0];
+  const trials = database.getTrialsForScope(scope.id);
+  const { pairRows, speciesRows } = buildAdvancedAnalysisRows(trials, true);
+  const comparisons = buildAdvancedComparisons(trials, true);
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const base = `seedbank-analysis-${stamp}`;
+  const pairPath = path.join(directory, `${base}-pairs.csv`);
+  const speciesPath = path.join(directory, `${base}-species.csv`);
+  const manifestPath = path.join(directory, `${base}-manifest.json`);
+  const manifest = {
+    generatedAt: new Date().toISOString(),
+    scope,
+    selectedWorkbookHashes: scope.workbookHashes.slice().sort(),
+    filters: { status: "D", endpoint: "PC", undocumentedTreatments: "descriptive_only" },
+    codebookVersion: database.getTreatmentCodebookVersion(),
+    estimands: ["median ordinal pair shift", "species-balanced mean shift", "non-tie win rate"],
+    randomSeeds: { speciesClusterBootstrap: 1729, iterations: 2000 },
+    tests: { speciesLevel: "two-sided exact sign test", ties: "excluded" },
+    correctionMethod: "Holm within propagule type",
+    comparisons
+  };
+  await Promise.all([
+    fs.promises.writeFile(pairPath, csvFromRows(pairRows as unknown as Array<Record<string, unknown>>), "utf8"),
+    fs.promises.writeFile(speciesPath, csvFromRows(speciesRows as unknown as Array<Record<string, unknown>>), "utf8"),
+    fs.promises.writeFile(manifestPath, JSON.stringify(manifest, null, 2), "utf8")
+  ]);
+  return { directory, files: [pairPath, speciesPath, manifestPath] };
+});
 
 ipcMain.handle("openai:speciesResearchCacheStatus", async (_event, batchId?: number) =>
   getSpeciesResearchCacheStatus(optionalBatchId(batchId))
@@ -598,6 +759,11 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
 
   const importResult = getDatabase().getImportResult(activeBatchId);
   if (!importResult) throw new Error("Could not reconstruct the requested import batch from local SQLite.");
+  const dataset = getDatabase().getDatasetState();
+  const activeScope = dataset.scopes.find(
+    (scope) => scope.id === dataset.activeScopeId && scope.batchIds.includes(activeBatchId)
+  );
+  if (activeScope) importResult.trials = getDatabase().getTrialsForScope(activeScope.id);
   const localSpecies = speciesInImport(importResult, requestedSpecies);
   if (!localSpecies) throw new Error("Select a species from the imported workbook before running research.");
   const batch = importResult.batch;
@@ -617,7 +783,7 @@ ipcMain.handle("openai:researchSpecies", async (_event, batchId: unknown, specie
     throw new Error("No cached AI research was found for this species. Add an OpenAI key to generate it.");
   }
 
-  const dashboard = withOpenAiStatus(getDatabase().getDashboard(activeBatchId));
+  const dashboard = withOpenAiStatus(activeScope ? getDatabase().getDashboardForScope(activeScope.id) : getDatabase().getDashboard(activeBatchId));
   const existing = speciesResearchInFlight.get(cacheKey);
   if (existing) return existing;
 

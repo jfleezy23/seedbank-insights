@@ -12,6 +12,42 @@ test("dashboard renders primary insight surfaces in browser fallback", async ({ 
   await expect(page.locator(".native-chart-bar")).toHaveCount(0);
 });
 
+test("Dataset Manager previews immutable imports and Advanced Analysis exposes formal results", async ({ page }) => {
+  await page.addInitScript(() => {
+    const scope = { id: 7, name: "Combined latest cohorts", batchIds: [1, 2], workbookHashes: ["a", "b"], scopeHash: "scope-hash", isCombined: true, createdAt: "2026-01-01" };
+    const dashboard = {
+      batch: { id: 2, filename: "ready.xlsx", importedAt: "2026-01-01", workbookHash: "b", rowCount: 2166, accessionCount: 1000, speciesCount: 500, treatmentCount: 20, warnings: [] },
+      batches: [], scope,
+      metrics: { trials: 2294, accessions: 1100, species: 510, treatments: 20, doneRate: 0.95, observationsExtracted: 0 },
+      treatmentSummaries: [], speciesSummaries: [], pairedComparisons: [], trialQueue: [], dataQualityIssues: [], askSuggestions: [], speciesInsights: [],
+      advancedComparisons: [{ id: "seed:C:CS", propaguleType: "seed", baseline: "C", treatment: "CS", pairCount: 537, speciesCount: 447, sourceCount: 400, completedOnly: true, wins: 450, ties: 30, losses: 57, speciesWins: 380, speciesTies: 20, speciesLosses: 47, nonTieWinRate: 0.887, medianDiff: 1, speciesMeanDiff: 1.02, ciLow: 0.91, ciHigh: 1.24, rawPValue: 0.0001, adjustedPValue: 0.0002, cohortDirections: [], confidence: "Strong signal", formalEligible: true, eligibilityReasons: [] }],
+      aiInsightStatus: { configured: false, state: "not_configured", message: "OpenAI optional", model: null, generatedAt: null }, speciesResearchCacheStatus: null
+    };
+    const dataset = { sources: [{ id: 1, label: "ready.xlsx", canonicalPath: "G:/Drive/ready.xlsx", createdAt: "2026-01-01", lastSeenAt: "2026-01-01", latestBatchId: 2, latestWorkbookHash: "b", available: true }], scopes: [scope], activeScopeId: 7 };
+    const preview = { token: "preview-1", filename: "ready.xlsx", sourcePath: "G:/Drive/ready.xlsx", workbookHash: "b2", worksheetName: "P_accesions_done", candidates: [], populatedRows: 2204, acceptedRows: 2166, quarantinedRows: [{ sourceRow: 35, worksheetName: "P_accesions_done", reasons: ["Missing treatment"], pAccession: "P35", sourceAccession: null, species: "Species test", treatment: null }], issues: [], unchangedSourceId: null, duplicateCandidates: [] };
+    (window as any).seedbank = {
+      getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }), getDashboard: async () => dashboard,
+      getDataset: async () => dataset, getTreatmentCodebook: async () => [], previewWorkbooks: async () => [preview],
+      getSpeciesResearchCacheStatus: async () => ({ batchId: 2, cacheVersion: "v", totalSpecies: 0, researchedSpecies: 0, missingSpecies: [], generatedAtLatest: null }),
+      commitImportPreviews: async () => ({ dataset, dashboard }), checkWorkbookUpdate: async () => preview,
+      relinkWorkbookSource: async () => preview,
+      createAnalysisScope: async () => ({ dataset, dashboard }), setAnalysisScope: async () => ({ dataset, dashboard }),
+      saveTreatmentCodebookEntry: async (entry: unknown) => [entry], exportAdvancedAnalysis: async () => null,
+      selectWorkbook: async () => dashboard, importLocalDefaultWorkbook: async () => dashboard
+    };
+  });
+  await page.goto("/");
+  await page.getByRole("button", { name: "Import spreadsheet" }).click();
+  await expect(page.getByRole("heading", { name: "Dataset Manager" })).toBeVisible();
+  await expect(page.getByText("2166")).toBeVisible();
+  await expect(page.getByText("Row 35: Missing treatment")).toBeVisible();
+  await expect(page.getByText("Scope: Combined latest cohorts")).toBeVisible();
+  await page.getByRole("button", { name: "Advanced Analysis", exact: true }).click();
+  await expect(page.getByText("CS vs C")).toBeVisible();
+  await expect(page.getByText("0.91 to 1.24")).toBeVisible();
+  await expect(page.getByText("Strong signal")).toBeVisible();
+});
+
 test("dashboard shows cache-backed research coverage and actionable workbook queues", async ({ page }) => {
   await page.addInitScript(() => {
     const dashboard = {
@@ -198,6 +234,15 @@ test("dashboard shows cache-backed research coverage and actionable workbook que
     (window as any).seedbank = {
       getOpenAiStatus: async () => ({ configured: false, safeStorageAvailable: true }),
       getDashboard: async () => dashboard,
+      getDataset: async () => ({ sources: [], scopes: [], activeScopeId: null }),
+      getTreatmentCodebook: async () => [],
+      previewWorkbooks: async () => [],
+      checkWorkbookUpdate: async () => null,
+      commitImportPreviews: async () => ({ dataset: { sources: [], scopes: [], activeScopeId: null }, dashboard }),
+      createAnalysisScope: async () => ({ dataset: { sources: [], scopes: [], activeScopeId: null }, dashboard }),
+      setAnalysisScope: async () => ({ dataset: { sources: [], scopes: [], activeScopeId: null }, dashboard }),
+      saveTreatmentCodebookEntry: async () => [],
+      exportAdvancedAnalysis: async () => null,
       getSpeciesResearchCacheStatus: async () => cacheStatus,
       selectWorkbook: async () => dashboard,
       importLocalDefaultWorkbook: async () => dashboard,

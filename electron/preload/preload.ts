@@ -1,5 +1,19 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AskAnswer, DashboardData, SpeciesResearchCacheStatus, SpeciesResearchResult } from "../../src/core/types";
+import type {
+  AnalysisScope,
+  AskAnswer,
+  DashboardData,
+  DatasetState,
+  ImportPreview,
+  SpeciesResearchCacheStatus,
+  SpeciesResearchResult,
+  TreatmentCodebookEntry
+} from "../../src/core/types";
+
+export interface DatasetResponse {
+  dataset: DatasetState;
+  dashboard: DashboardData;
+}
 
 export interface OpenAiStatus {
   configured: boolean;
@@ -9,6 +23,16 @@ export interface OpenAiStatus {
 
 export interface SeedBankApi {
   getDashboard(): Promise<DashboardData>;
+  getDataset(): Promise<DatasetState>;
+  previewWorkbooks(): Promise<ImportPreview[]>;
+  checkWorkbookUpdate(sourceId: number): Promise<ImportPreview>;
+  relinkWorkbookSource(sourceId: number): Promise<ImportPreview | null>;
+  commitImportPreviews(tokens: string[]): Promise<DatasetResponse>;
+  createAnalysisScope(name: string, batchIds: number[]): Promise<DatasetResponse>;
+  setAnalysisScope(scopeId: number): Promise<DatasetResponse>;
+  getTreatmentCodebook(): Promise<TreatmentCodebookEntry[]>;
+  saveTreatmentCodebookEntry(entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">): Promise<TreatmentCodebookEntry[]>;
+  exportAdvancedAnalysis(): Promise<{ directory: string; files: string[] } | null>;
   selectWorkbook(): Promise<DashboardData | null>;
   importLocalDefaultWorkbook(): Promise<DashboardData | null>;
   getOpenAiStatus(): Promise<OpenAiStatus>;
@@ -22,6 +46,16 @@ export interface SeedBankApi {
 
 const api: SeedBankApi = {
   getDashboard: () => ipcRenderer.invoke("dashboard:get"),
+  getDataset: () => ipcRenderer.invoke("dataset:get"),
+  previewWorkbooks: () => ipcRenderer.invoke("dataset:previewSelect"),
+  checkWorkbookUpdate: (sourceId) => ipcRenderer.invoke("dataset:checkUpdate", sourceId),
+  relinkWorkbookSource: (sourceId) => ipcRenderer.invoke("dataset:relink", sourceId),
+  commitImportPreviews: (tokens) => ipcRenderer.invoke("dataset:commitPreviews", tokens),
+  createAnalysisScope: (name, batchIds) => ipcRenderer.invoke("dataset:createScope", name, batchIds),
+  setAnalysisScope: (scopeId) => ipcRenderer.invoke("dataset:setScope", scopeId),
+  getTreatmentCodebook: () => ipcRenderer.invoke("codebook:get"),
+  saveTreatmentCodebookEntry: (entry) => ipcRenderer.invoke("codebook:save", entry),
+  exportAdvancedAnalysis: () => ipcRenderer.invoke("analysis:export"),
   selectWorkbook: () => ipcRenderer.invoke("workbook:select"),
   importLocalDefaultWorkbook: () => ipcRenderer.invoke("workbook:importLocalDefault"),
   getOpenAiStatus: () => ipcRenderer.invoke("openai:status"),

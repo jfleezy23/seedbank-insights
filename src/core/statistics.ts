@@ -1,7 +1,11 @@
 import type {
+  AdvancedPairRow,
+  AdvancedComparison,
+  AdvancedSpeciesRow,
   ConfidenceLabel,
   DataQualityIssue,
   PairedComparison,
+  PropaguleType,
   TreatmentSummary,
   TrialQueueItem,
   TrialRecord
@@ -43,12 +47,13 @@ function confidenceForTreatment(
 export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
   const groups = new Map<string, TrialRecord[]>();
   for (const trial of trials) {
-    const key = trial.treatment || "Unknown";
+    const key = `${propaguleType(trial)}\u0000${trial.treatment || "Unknown"}`;
     groups.set(key, [...(groups.get(key) ?? []), trial]);
   }
 
   return [...groups.entries()]
-    .map(([treatment, rows]) => {
+    .map(([key, rows]) => {
+      const [type, treatment] = key.split("\u0000") as [PropaguleType, string];
       const pcValues = rows.map((row) => row.pc).filter(definedScore);
       const lpcValues = rows.map((row) => row.lpc).filter(definedScore);
       const fourPcValues = rows.map((row) => row.fourPc).filter(definedScore);
@@ -67,6 +72,7 @@ export function summarizeTreatments(trials: TrialRecord[]): TreatmentSummary[] {
             : "Use paired comparisons before ranking this treatment across species.";
       return {
         treatment,
+        propaguleType: type,
         rows: rows.length,
         species,
         accessions,
@@ -257,55 +263,343 @@ export function pairedComparison(
 }
 
 export function buildDefaultComparisons(trials: TrialRecord[]): PairedComparison[] {
-  const treatmentMetadata = new Map<string, { isControl: boolean }>();
-  for (const trial of trials) {
-    treatmentMetadata.set(trial.treatment, { isControl: trial.treatmentComponents.isControl });
-  }
-
-  const order = (left: string, right: string): number => {
-    const priority = (treatment: string) => {
-      if (treatment === "C") return 0;
-      if (treatmentMetadata.get(treatment)?.isControl) return 1;
-      return 2;
-    };
-    return priority(left) - priority(right) || left.localeCompare(right);
-  };
-
-  const treatmentPairs = new Set<string>();
-  const grouped = new Map<string, Set<string>>();
-  for (const trial of trials) {
-    if (!definedScore(trial.pc)) continue;
-    const key = `${trial.pAccession}|||${trial.species.trim().toLowerCase()}`;
-    const treatments = grouped.get(key) ?? new Set<string>();
-    treatments.add(trial.treatment);
-    grouped.set(key, treatments);
-  }
-  for (const treatments of grouped.values()) {
-    const sorted = [...treatments].sort(order);
-    for (let left = 0; left < sorted.length; left += 1) {
-      for (let right = left + 1; right < sorted.length; right += 1) {
-        treatmentPairs.add(`${sorted[left]}\u0000${sorted[right]}`);
-      }
-    }
-  }
-
-  const comparisons = [...treatmentPairs]
-    .map((pair) => {
-      const [baseline, treatment] = pair.split("\u0000");
-      return pairedComparison(trials, baseline, treatment);
-    })
-    .filter((comparison) => comparison.n > 0)
-    .sort(
-      (a, b) =>
-        confidenceRank(b.confidence) - confidenceRank(a.confidence) ||
-        b.n - a.n ||
-        Math.abs(b.meanDiff) - Math.abs(a.meanDiff)
-    );
+  const comparisons = buildAdvancedComparisons(trials, false).map<PairedComparison>((comparison) => ({
+    baseline: comparison.baseline,
+    treatment: comparison.treatment,
+    n: comparison.pairCount,
+    speciesCount: comparison.speciesCount,
+    sourceCount: comparison.sourceCount,
+    propaguleType: comparison.propaguleType,
+    completedOnly: false,
+    improved: comparison.wins,
+    tied: comparison.ties,
+    worse: comparison.losses,
+    meanDiff: comparison.speciesMeanDiff,
+    medianDiff: comparison.medianDiff,
+    ciLow: comparison.ciLow,
+    ciHigh: comparison.ciHigh,
+    nonTieWinRate: comparison.nonTieWinRate,
+    speciesMeanDiff: comparison.speciesMeanDiff,
+    adjustedPValue: comparison.adjustedPValue,
+    confidence: comparison.confidence,
+    falsePositiveRisk: comparison.formalEligible
+      ? "Species-clustered uncertainty and multiplicity correction are available in Advanced Analysis."
+      : `Descriptive only: ${comparison.eligibilityReasons.join(" ")}`,
+    falseNegativeRisk:
+      comparison.ties > comparison.wins + comparison.losses
+        ? "Many paired outcomes are tied; review the non-tie direction and cohort detail."
+        : "Review species and cohort breadth before changing a protocol.",
+    additionalTrialsNeeded: Math.max(0, 10 - comparison.speciesCount),
+    replicationTargetBasis: "Additional species needed for formal-review eligibility; this is not a power estimate.",
+    examples: []
+  }));
   if (comparisons.length <= 1) return comparisons;
   return comparisons.map((comparison) => ({
     ...comparison,
     falsePositiveRisk: `${comparison.falsePositiveRisk} This workbook scan evaluated ${comparisons.length} paired treatment contrasts, so rank and direction should be confirmed rather than read as a corrected significance test.`
   }));
+}
+
+interface PairEffect {
+  species: string;
+  source: string;
+  cohort: string;
+  diff: number;
+}
+
+function propaguleType(trial: TrialRecord): PropaguleType {
+  if (trial.propaguleTypeCanonical) return trial.propaguleTypeCanonical;
+  const raw = trial.propaguleType?.trim().toLowerCase();
+  if (raw === "s" || raw === "seed") return "seed";
+  if (raw === "sc" || raw === "cs" || raw === "stem cutting" || raw === "stem_cutting") return "stem_cutting";
+  if (raw === "d" || raw === "division") return "division";
+  return "unknown";
+}
+
+function experimentalUnitKey(trial: TrialRecord): string {
+  return [
+    trial.pAccession,
+    trial.sourceAccession || "<missing-source>",
+    trial.species.trim().toLowerCase(),
+    propaguleType(trial)
+  ].join("|||");
+}
+
+function clusterInterval(speciesEffects: Map<string, number>, iterations = 2000): [number, number] {
+  const values = [...speciesEffects.values()];
+  if (values.length < 2) {
+    const value = values[0] ?? 0;
+    return [value, value];
+  }
+  let seed = 1729;
+  const random = () => {
+    seed = (seed * 48271) % 0x7fffffff;
+    return seed / 0x7fffffff;
+  };
+  const estimates: number[] = [];
+  for (let iteration = 0; iteration < iterations; iteration += 1) {
+    let total = 0;
+    for (let index = 0; index < values.length; index += 1) {
+      total += values[Math.floor(random() * values.length)];
+    }
+    estimates.push(total / values.length);
+  }
+  return [round(percentile(estimates, 0.025), 2), round(percentile(estimates, 0.975), 2)];
+}
+
+function exactSignPValue(wins: number, losses: number): number | null {
+  const n = wins + losses;
+  if (!n) return null;
+  const tail = Math.min(wins, losses);
+  let probability = 0.5 ** n;
+  let cumulative = probability;
+  for (let k = 0; k < tail; k += 1) {
+    probability *= (n - k) / (k + 1);
+    cumulative += probability;
+  }
+  return Math.min(1, cumulative * 2);
+}
+
+function holmAdjust(comparisons: AdvancedComparison[]): void {
+  const eligible = comparisons
+    .filter((comparison) => comparison.rawPValue !== null)
+    .sort((left, right) => (left.rawPValue ?? 1) - (right.rawPValue ?? 1));
+  let previous = 0;
+  eligible.forEach((comparison, index) => {
+    const adjusted = Math.min(1, (comparison.rawPValue ?? 1) * (eligible.length - index));
+    comparison.adjustedPValue = Math.max(previous, adjusted);
+    previous = comparison.adjustedPValue;
+  });
+}
+
+function evidenceTier(comparison: AdvancedComparison): ConfidenceLabel {
+  const nonTiedSpecies = comparison.speciesWins + comparison.speciesLosses;
+  const speciesWinRate = nonTiedSpecies ? comparison.speciesWins / nonTiedSpecies : 0;
+  const direction = Math.max(speciesWinRate, 1 - speciesWinRate);
+  const effect = Math.abs(comparison.speciesMeanDiff);
+  const repeatedCohorts = comparison.cohortDirections.filter(
+    (cohort) => cohort.speciesCount >= 5 && Math.sign(cohort.meanDiff) === Math.sign(comparison.speciesMeanDiff)
+  ).length;
+  if (comparison.speciesCount < 5 || nonTiedSpecies < 5) return "Needs replication";
+  if (
+    comparison.ciLow <= 0 && comparison.ciHigh >= 0 ||
+    comparison.adjustedPValue === null ||
+    comparison.adjustedPValue >= 0.05
+  ) return "Inconclusive";
+  if (
+    comparison.speciesCount >= 30 &&
+    nonTiedSpecies >= 20 &&
+    effect >= 1 &&
+    direction >= 0.75 &&
+    comparison.adjustedPValue < 0.01 &&
+    repeatedCohorts >= 2
+  ) return "Strong signal";
+  if (comparison.speciesCount >= 10 && effect >= 0.5 && direction >= 0.67) return "Promising";
+  return "Inconclusive";
+}
+
+export function buildAdvancedAnalysisRows(
+  trials: TrialRecord[],
+  completedOnly = true
+): { pairRows: AdvancedPairRow[]; speciesRows: AdvancedSpeciesRow[] } {
+  const analyzable = trials.filter(
+    (trial) =>
+      definedScore(trial.pc) &&
+      propaguleType(trial) !== "unknown" &&
+      trial.analysisEligibility !== "quarantined" &&
+      trial.replicateClassification !== "ambiguous_duplicate" &&
+      (!completedOnly || trial.status === "D")
+  );
+  const units = new Map<string, TrialRecord[]>();
+  for (const trial of analyzable) {
+    const key = experimentalUnitKey(trial);
+    units.set(key, [...(units.get(key) ?? []), trial]);
+  }
+  const pairRows: AdvancedPairRow[] = [];
+  for (const rows of units.values()) {
+    const byTreatment = new Map<string, TrialRecord[]>();
+    for (const row of rows) {
+      if (!definedScore(row.pc)) continue;
+      byTreatment.set(row.treatment, [...(byTreatment.get(row.treatment) ?? []), row]);
+    }
+    const treatmentScores = [...byTreatment.entries()]
+      .map(([treatment, treatmentRows]) => ({
+        treatment,
+        rows: treatmentRows,
+        score: median(treatmentRows.map((row) => row.pc as number)) ?? 0
+      }))
+      .sort((left, right) => left.treatment.localeCompare(right.treatment));
+    for (let left = 0; left < treatmentScores.length; left += 1) {
+      for (let right = left + 1; right < treatmentScores.length; right += 1) {
+        let baseline = treatmentScores[left];
+        let treatment = treatmentScores[right];
+        if (treatment.treatment === "C" || (baseline.treatment !== "C" && treatment.treatment.endsWith("+C"))) {
+          [baseline, treatment] = [treatment, baseline];
+        }
+        const first = rows[0];
+        const type = propaguleType(first);
+        pairRows.push({
+          comparisonId: [type, baseline.treatment, treatment.treatment].join(":"),
+          propaguleType: type,
+          baseline: baseline.treatment,
+          treatment: treatment.treatment,
+          pAccession: first.pAccession,
+          sourceAccession: first.sourceAccession,
+          species: first.species,
+          cohort: first.cohort ?? "Unknown",
+          baselineScore: round(baseline.score, 2),
+          treatmentScore: round(treatment.score, 2),
+          diff: round(treatment.score - baseline.score, 2),
+          sourceFilename: first.sourceFilename ?? "",
+          worksheet: first.sourceWorksheet ?? "",
+          workbookHash: first.workbookHash ?? "",
+          sourceRows: [...new Set([...baseline.rows, ...treatment.rows].map((row) => row.sourceRow))]
+            .sort((a, b) => a - b)
+            .join("|")
+        });
+      }
+    }
+  }
+  const speciesGroups = new Map<string, AdvancedPairRow[]>();
+  for (const row of pairRows) {
+    const key = `${row.comparisonId}\u0000${row.species.trim().toLowerCase()}`;
+    speciesGroups.set(key, [...(speciesGroups.get(key) ?? []), row]);
+  }
+  const speciesRows = [...speciesGroups.values()].map<AdvancedSpeciesRow>((rows) => ({
+    comparisonId: rows[0].comparisonId,
+    propaguleType: rows[0].propaguleType,
+    baseline: rows[0].baseline,
+    treatment: rows[0].treatment,
+    species: rows[0].species,
+    pairCount: rows.length,
+    meanDiff: round(mean(rows.map((row) => row.diff)) ?? 0, 3)
+  }));
+  return { pairRows, speciesRows };
+}
+
+export function buildAdvancedComparisons(
+  trials: TrialRecord[],
+  completedOnly = true
+): AdvancedComparison[] {
+  const analyzable = trials.filter(
+    (trial) =>
+      definedScore(trial.pc) &&
+      propaguleType(trial) !== "unknown" &&
+      trial.analysisEligibility !== "quarantined" &&
+      trial.replicateClassification !== "ambiguous_duplicate" &&
+      (!completedOnly || trial.status === "D")
+  );
+  const units = new Map<string, TrialRecord[]>();
+  for (const trial of analyzable) {
+    const key = experimentalUnitKey(trial);
+    units.set(key, [...(units.get(key) ?? []), trial]);
+  }
+  const effects = new Map<string, PairEffect[]>();
+  for (const rows of units.values()) {
+    const byTreatment = new Map<string, number[]>();
+    for (const row of rows) {
+      if (!definedScore(row.pc)) continue;
+      byTreatment.set(row.treatment, [...(byTreatment.get(row.treatment) ?? []), row.pc]);
+    }
+    const treatmentScores = [...byTreatment.entries()]
+      .map(([treatment, scores]) => [treatment, median(scores) ?? 0] as const)
+      .sort(([left], [right]) => left.localeCompare(right));
+    for (let left = 0; left < treatmentScores.length; left += 1) {
+      for (let right = left + 1; right < treatmentScores.length; right += 1) {
+        let [baseline, baselineScore] = treatmentScores[left];
+        let [treatment, treatmentScore] = treatmentScores[right];
+        if (treatment === "C" || (baseline !== "C" && treatment.endsWith("+C"))) {
+          [baseline, treatment] = [treatment, baseline];
+          [baselineScore, treatmentScore] = [treatmentScore, baselineScore];
+        }
+        const first = rows[0];
+        const key = [propaguleType(first), baseline, treatment].join("\u0000");
+        effects.set(key, [
+          ...(effects.get(key) ?? []),
+          {
+            species: first.species.trim().toLowerCase(),
+            source: first.sourceAccession || first.pAccession,
+            cohort: first.cohort ?? "Unknown",
+            diff: round(treatmentScore - baselineScore, 2)
+          }
+        ]);
+      }
+    }
+  }
+  const comparisons: AdvancedComparison[] = [];
+  for (const [key, pairEffects] of effects.entries()) {
+    const [type, baseline, treatment] = key.split("\u0000") as [PropaguleType, string, string];
+    const bySpecies = new Map<string, number[]>();
+    for (const effect of pairEffects) {
+      bySpecies.set(effect.species, [...(bySpecies.get(effect.species) ?? []), effect.diff]);
+    }
+    const speciesEffects = new Map(
+      [...bySpecies.entries()].map(([species, values]) => [species, mean(values) ?? 0])
+    );
+    const values = pairEffects.map((effect) => effect.diff);
+    const speciesValues = [...speciesEffects.values()];
+    const wins = values.filter((value) => value > 0).length;
+    const losses = values.filter((value) => value < 0).length;
+    const ties = values.length - wins - losses;
+    const speciesWins = speciesValues.filter((value) => value > 0).length;
+    const speciesLosses = speciesValues.filter((value) => value < 0).length;
+    const documented = analyzable
+      .filter((trial) => propaguleType(trial) === type && [baseline, treatment].includes(trial.treatment))
+      .every((trial) => trial.analysisEligibility === "eligible");
+    const formalEligible = documented && speciesEffects.size >= 10 && speciesWins + speciesLosses >= 5;
+    const byCohort = new Map<string, PairEffect[]>();
+    pairEffects.forEach((effect) =>
+      byCohort.set(effect.cohort, [...(byCohort.get(effect.cohort) ?? []), effect])
+    );
+    const [ciLow, ciHigh] = clusterInterval(speciesEffects);
+    comparisons.push({
+      id: [type, baseline, treatment].join(":"),
+      propaguleType: type,
+      baseline,
+      treatment,
+      pairCount: values.length,
+      speciesCount: speciesEffects.size,
+      sourceCount: new Set(pairEffects.map((effect) => effect.source)).size,
+      completedOnly,
+      wins,
+      ties,
+      losses,
+      speciesWins,
+      speciesTies: speciesValues.length - speciesWins - speciesLosses,
+      speciesLosses,
+      nonTieWinRate: wins + losses ? round(wins / (wins + losses), 3) : null,
+      medianDiff: round(median(values) ?? 0, 2),
+      speciesMeanDiff: round(mean(speciesValues) ?? 0, 2),
+      ciLow,
+      ciHigh,
+      rawPValue: formalEligible ? exactSignPValue(speciesWins, speciesLosses) : null,
+      adjustedPValue: null,
+      cohortDirections: [...byCohort.entries()].map(([cohort, cohortEffects]) => ({
+        cohort,
+        speciesCount: new Set(cohortEffects.map((effect) => effect.species)).size,
+        meanDiff: round(mean(cohortEffects.map((effect) => effect.diff)) ?? 0, 2)
+      })),
+      confidence: "Inconclusive",
+      formalEligible,
+      eligibilityReasons: [
+        !documented ? "One or more treatment tokens are not mapped in the active codebook." : null,
+        speciesEffects.size < 10 ? "Fewer than 10 species." : null,
+        speciesWins + speciesLosses < 5 ? "Fewer than 5 non-tied species." : null
+      ].filter((reason): reason is string => Boolean(reason))
+    });
+  }
+  for (const type of ["seed", "stem_cutting", "division"] as const) {
+    holmAdjust(comparisons.filter((comparison) => comparison.propaguleType === type));
+  }
+  comparisons.forEach((comparison) => {
+    comparison.confidence = evidenceTier(comparison);
+  });
+  return comparisons.sort(
+    (left, right) =>
+      confidenceRank(right.confidence) - confidenceRank(left.confidence) ||
+      right.pairCount - left.pairCount ||
+      right.speciesCount - left.speciesCount
+  );
 }
 
 export function buildTrialQueue(trials: TrialRecord[]): TrialQueueItem[] {

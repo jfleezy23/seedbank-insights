@@ -1,6 +1,6 @@
 {
   "name": "seedbank-insights",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "description": "Desktop insight UI for PSU-style seed bank propagation spreadsheets.",
   "main": "dist-electron/electron/main/main.js",
@@ -53,6 +53,7 @@
   "build": {
     "appId": "com.aginsights.seedbank",
     "productName": "SeedBank Insights",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release"
     },

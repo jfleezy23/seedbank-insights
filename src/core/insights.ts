@@ -8,7 +8,13 @@ import type {
   SpeciesInsight,
   TrialRecord
 } from "./types";
-import { buildDefaultComparisons, buildTrialQueue, qualityIssues, summarizeTreatments } from "./statistics";
+import {
+  buildAdvancedComparisons,
+  buildDefaultComparisons,
+  buildTrialQueue,
+  qualityIssues,
+  summarizeTreatments
+} from "./statistics";
 
 export function buildDashboardData(
   trials: TrialRecord[],
@@ -43,6 +49,7 @@ export function buildDashboardData(
     treatmentSummaries: summarizeTreatments(trials).slice(0, 12),
     speciesSummaries,
     pairedComparisons,
+    advancedComparisons: buildAdvancedComparisons(trials, true),
     trialQueue: buildTrialQueue(trials),
     dataQualityIssues: issues,
     askSuggestions: [

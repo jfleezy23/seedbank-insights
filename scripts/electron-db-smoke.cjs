@@ -6,12 +6,12 @@ const BetterSqlite = require("better-sqlite3");
 const { SeedBankDatabase } = require("../dist-electron/electron/main/database.js");
 const { parseTreatment } = require("../dist-electron/src/core/treatments.js");
 
-function trial(row, treatment, pc) {
+function trial(row, treatment, pc, accession = "P1") {
   return {
-    id: `P1:${treatment}:${row}`,
+    id: `${accession}:${treatment}:${row}`,
     sourceRow: row,
-    pAccession: "P1",
-    sourceAccession: "SB1",
+    pAccession: accession,
+    sourceAccession: `SB-${accession}`,
     species: "Lomatium macrocarpum",
     treatment,
     num: 50,
@@ -39,11 +39,15 @@ function trial(row, treatment, pc) {
     pcd: null,
     notes: null,
     treatmentComponents: parseTreatment(treatment)
+    ,propaguleTypeCanonical: "seed"
+    ,analysisEligibility: "eligible"
+    ,rawCellValues: { pc }
+    ,normalizedCellValues: { pc }
   };
 }
 
-function importResult(filename) {
-  const trials = [trial(2, "C", 0), trial(3, "CS", 5)];
+function importResult(filename, accession = "P1") {
+  const trials = [trial(2, "C", 0, accession), trial(3, "CS", 5, accession)];
   return {
     batch: {
       filename,
@@ -54,6 +58,10 @@ function importResult(filename) {
       speciesCount: 1,
       treatmentCount: 2,
       warnings: ["Synthetic warning"]
+      ,sourcePath: path.join(dir, filename)
+      ,worksheetName: "Accessions"
+      ,populatedRowCount: trials.length
+      ,quarantinedRowCount: 0
     },
     trials,
     observations: [
@@ -79,7 +87,8 @@ function importResult(filename) {
         species: ["Lomatium macrocarpum"],
         metric: "PC"
       }
-    ]
+    ],
+    quarantinedRows: []
   };
 }
 
@@ -89,9 +98,11 @@ const db = new SeedBankDatabase(path.join(dir, "test.sqlite"));
 try {
   const first = db.saveImport(importResult("first.xlsx"));
   const second = db.saveImport(importResult("second.xlsx"));
+  const unchanged = db.saveImport(importResult("first.xlsx"));
 
   if (first.batch?.id !== 1) throw new Error(`Expected first batch id 1, got ${first.batch?.id}`);
   if (second.batch?.id !== 2) throw new Error(`Expected second batch id 2, got ${second.batch?.id}`);
+  if (unchanged.batch?.id !== 1) throw new Error("Matching source content created a duplicate version");
   if (db.getDashboard(1).metrics.trials !== 2) throw new Error("First batch trial count changed");
   if (db.getDashboard(2).metrics.trials !== 2) throw new Error("Second batch trial count changed");
   const issueTitles = db.getDashboard(2).dataQualityIssues.map((issue) => issue.title);
@@ -111,6 +122,21 @@ try {
   }
   if (reconstructed.batch.warnings[0] !== "Synthetic warning") {
     throw new Error("Reconstructed batch warnings changed");
+  }
+  if (reconstructed.trials[1].rawCellValues?.pc !== 5) {
+    throw new Error("Raw and normalized cell evidence did not survive persistence");
+  }
+  let overlapBlocked = false;
+  try {
+    db.createScope("overlap", [1, 2]);
+  } catch {
+    overlapBlocked = true;
+  }
+  if (!overlapBlocked) throw new Error("Cross-source natural-key overlap did not block combined analysis");
+  const third = db.saveImport(importResult("third.xlsx", "P2"));
+  const combined = db.createScope("combined", [1, third.batch.id]);
+  if (!combined.isCombined || db.setActiveScope(combined.id).metrics.trials !== 4) {
+    throw new Error("Explicit combined scope did not preserve disjoint cohorts");
   }
 
   const legacyPath = path.join(dir, "legacy.sqlite");

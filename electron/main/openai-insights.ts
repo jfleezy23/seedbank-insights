@@ -595,6 +595,9 @@ interface SpeciesContext {
   deterministicConfidence: ConfidenceLabel;
   trials: Array<{
     sourceRow: number;
+    sourceFilename: string;
+    worksheet: string;
+    workbookHash: string;
     accession: string;
     sourceAccession: string;
     family: string | null;
@@ -787,6 +790,9 @@ function deterministicSpeciesConfidence(trials: TrialRecord[]): ConfidenceLabel 
 function fallbackEvidence(context: SpeciesContext): SpeciesInsightEvidence[] {
   return context.trials.slice(0, 3).map((trial) => ({
     sourceRow: trial.sourceRow,
+    sourceFilename: trial.sourceFilename,
+    worksheet: trial.worksheet,
+    workbookHash: trial.workbookHash,
     accession: trial.accession,
     treatment: trial.treatment,
     observation:
@@ -825,6 +831,9 @@ function hydrateEvidence(context: SpeciesContext, draftEvidence: z.infer<typeof 
     seenRows.add(item.sourceRow);
     evidence.push({
       sourceRow: trial.sourceRow,
+      sourceFilename: trial.sourceFilename,
+      worksheet: trial.worksheet,
+      workbookHash: trial.workbookHash,
       accession: trial.accession,
       treatment: trial.treatment,
       observation: evidenceObservation(context, trial)
@@ -1091,6 +1100,9 @@ export function buildSpeciesInsightContexts(result: ImportResult): SpeciesContex
           .slice(0, 14)
           .map((trial) => ({
             sourceRow: trial.sourceRow,
+            sourceFilename: trial.sourceFilename ?? "",
+            worksheet: trial.sourceWorksheet ?? "",
+            workbookHash: trial.workbookHash ?? "",
             accession: trial.pAccession,
             sourceAccession: trial.sourceAccession,
             family: trial.family ?? null,

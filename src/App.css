@@ -1635,6 +1635,96 @@ td strong {
   color: var(--forest);
 }
 
+.scope-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--forest);
+  background: #f5f7f2;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.dataset-grid,
+.preview-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+  margin-top: 18px;
+}
+
+.dataset-row,
+.preview-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fafbf8;
+}
+
+.dataset-row div,
+.preview-card {
+  min-width: 0;
+}
+
+.dataset-row small,
+.preview-card span {
+  display: block;
+  overflow: hidden;
+  color: var(--muted);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.preview-card {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.preview-card dl {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0;
+}
+
+.preview-card dl div {
+  padding: 8px;
+  background: #fff;
+}
+
+.preview-card dt { color: var(--muted); font-size: 11px; }
+.preview-card dd { margin: 2px 0 0; font-weight: 800; }
+
+.codebook-form {
+  display: grid;
+  grid-template-columns: 150px 110px 1fr 2fr auto;
+  gap: 8px;
+}
+
+.codebook-form input,
+.codebook-form select,
+.dataset-grid select {
+  min-height: 40px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: #fff;
+}
+
+.table-scroll { overflow-x: auto; }
+.advanced-table { width: 100%; border-collapse: collapse; }
+.advanced-table th,
+.advanced-table td { padding: 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+.advanced-table th { color: var(--muted); font-size: 11px; text-transform: uppercase; }
+
 @media (max-width: 1280px) {
   .app-shell {
     grid-template-columns: 112px minmax(0, 1fr);
@@ -1660,7 +1750,9 @@ td strong {
   .metrics-grid,
   .overview-grid,
   .dashboard-grid,
-  .view-grid.two-column {
+  .view-grid.two-column,
+  .dataset-grid,
+  .preview-grid {
     grid-template-columns: 1fr 1fr;
   }
 
@@ -1708,7 +1800,10 @@ td strong {
   .metrics-grid,
   .overview-grid,
   .dashboard-grid,
-  .view-grid.two-column {
+  .view-grid.two-column,
+  .dataset-grid,
+  .preview-grid,
+  .codebook-form {
     grid-template-columns: 1fr;
   }
 }

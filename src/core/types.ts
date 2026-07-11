@@ -4,7 +4,10 @@ export type ConfidenceLabel =
   | "Inconclusive"
   | "Needs replication";
 
-export type PropagationScoreScale = "ordinal_0_5" | "percent_0_100" | "invalid";
+export type PropagationScoreScale = "ordinal_0_5" | "percent_0_100" | "ambiguous" | "invalid";
+export type PropaguleType = "seed" | "stem_cutting" | "division" | "unknown";
+export type AnalysisEligibility = "eligible" | "descriptive_only" | "quarantined";
+export type ReplicateClassification = "unique" | "genuine_replicate" | "ambiguous_duplicate";
 
 export type ObservationKind =
   | "pc"
@@ -32,6 +35,10 @@ export interface TrialRecord {
   id: string;
   importBatchId?: number;
   sourceRow: number;
+  sourceId?: number;
+  sourceFilename?: string;
+  sourceWorksheet?: string;
+  workbookHash?: string;
   pAccession: string;
   sourceAccession: string;
   species: string;
@@ -40,6 +47,8 @@ export interface TrialRecord {
   num: number | null;
   startDate: string | null;
   propaguleType: string | null;
+  propaguleTypeRaw?: string | null;
+  propaguleTypeCanonical?: PropaguleType;
   ttd: string | null;
   pc: number | null;
   pcRaw?: number | null;
@@ -62,6 +71,84 @@ export interface TrialRecord {
   pcd: string | null;
   notes: string | null;
   treatmentComponents: TreatmentComponents;
+  analysisEligibility?: AnalysisEligibility;
+  validationWarnings?: string[];
+  cohort?: string | null;
+  rawCellValues?: Record<string, string | number | boolean | null>;
+  normalizedCellValues?: Record<string, string | number | boolean | null>;
+  replicateClassification?: ReplicateClassification;
+}
+
+export interface QuarantinedRow {
+  sourceRow: number;
+  worksheetName: string;
+  reasons: string[];
+  pAccession: string | null;
+  sourceAccession: string | null;
+  species: string | null;
+  treatment: string | null;
+}
+
+export interface WorkbookSource {
+  id: number;
+  label: string;
+  canonicalPath: string;
+  createdAt: string;
+  lastSeenAt: string | null;
+  latestBatchId: number | null;
+  latestWorkbookHash: string | null;
+  available: boolean;
+}
+
+export interface WorkbookCandidate {
+  worksheetName: string;
+  populatedRows: number;
+  headerCoverage: number;
+  missingHeaders: string[];
+  selected?: boolean;
+}
+
+export interface ImportPreview {
+  token: string;
+  filename: string;
+  sourcePath: string;
+  workbookHash: string;
+  worksheetName: string;
+  candidates: WorkbookCandidate[];
+  populatedRows: number;
+  acceptedRows: number;
+  quarantinedRows: QuarantinedRow[];
+  issues: DataQualityIssue[];
+  unchangedSourceId: number | null;
+  duplicateCandidates: number[];
+}
+
+export interface AnalysisScope {
+  id: number;
+  name: string;
+  batchIds: number[];
+  workbookHashes: string[];
+  scopeHash: string;
+  isCombined: boolean;
+  createdAt: string;
+}
+
+export interface DatasetState {
+  sources: WorkbookSource[];
+  scopes: AnalysisScope[];
+  activeScopeId: number | null;
+  pendingPreviews?: ImportPreview[];
+}
+
+export interface TreatmentCodebookEntry {
+  id?: number;
+  version: number;
+  propaguleType: PropaguleType;
+  token: string;
+  label: string;
+  meaning: string;
+  active: boolean;
+  builtIn: boolean;
 }
 
 export interface ParsedObservation {
@@ -91,6 +178,9 @@ export interface DataQualityIssue {
 
 export interface SpeciesInsightEvidence {
   sourceRow: number;
+  sourceFilename?: string;
+  worksheet?: string;
+  workbookHash?: string;
   accession: string;
   treatment: string;
   observation: string;
@@ -223,6 +313,11 @@ export interface ImportBatchSummary {
   speciesCount: number;
   treatmentCount: number;
   warnings: string[];
+  sourceId?: number;
+  sourcePath?: string;
+  worksheetName?: string;
+  populatedRowCount?: number;
+  quarantinedRowCount?: number;
 }
 
 export interface ImportResult {
@@ -230,10 +325,12 @@ export interface ImportResult {
   trials: TrialRecord[];
   observations: ParsedObservation[];
   issues: DataQualityIssue[];
+  quarantinedRows?: QuarantinedRow[];
 }
 
 export interface TreatmentSummary {
   treatment: string;
+  propaguleType?: PropaguleType;
   rows: number;
   species: number;
   accessions: number;
@@ -263,6 +360,9 @@ export interface PairedComparison {
   treatment: string;
   n: number;
   speciesCount: number;
+  sourceCount?: number;
+  propaguleType?: PropaguleType;
+  completedOnly?: boolean;
   improved: number;
   tied: number;
   worse: number;
@@ -270,6 +370,9 @@ export interface PairedComparison {
   medianDiff: number;
   ciLow: number;
   ciHigh: number;
+  nonTieWinRate?: number | null;
+  speciesMeanDiff?: number;
+  adjustedPValue?: number | null;
   confidence: ConfidenceLabel;
   falsePositiveRisk: string;
   falseNegativeRisk: string;
@@ -282,6 +385,62 @@ export interface PairedComparison {
     treatmentScore: number;
     diff: number;
   }>;
+}
+
+export interface AdvancedComparison {
+  id: string;
+  propaguleType: PropaguleType;
+  baseline: string;
+  treatment: string;
+  pairCount: number;
+  speciesCount: number;
+  sourceCount: number;
+  completedOnly: boolean;
+  wins: number;
+  ties: number;
+  losses: number;
+  speciesWins: number;
+  speciesTies: number;
+  speciesLosses: number;
+  nonTieWinRate: number | null;
+  medianDiff: number;
+  speciesMeanDiff: number;
+  ciLow: number;
+  ciHigh: number;
+  rawPValue: number | null;
+  adjustedPValue: number | null;
+  cohortDirections: Array<{ cohort: string; speciesCount: number; meanDiff: number }>;
+  confidence: ConfidenceLabel;
+  formalEligible: boolean;
+  eligibilityReasons: string[];
+}
+
+export interface AdvancedPairRow {
+  comparisonId: string;
+  propaguleType: PropaguleType;
+  baseline: string;
+  treatment: string;
+  pAccession: string;
+  sourceAccession: string;
+  species: string;
+  cohort: string;
+  baselineScore: number;
+  treatmentScore: number;
+  diff: number;
+  sourceFilename: string;
+  worksheet: string;
+  workbookHash: string;
+  sourceRows: string;
+}
+
+export interface AdvancedSpeciesRow {
+  comparisonId: string;
+  propaguleType: PropaguleType;
+  baseline: string;
+  treatment: string;
+  species: string;
+  pairCount: number;
+  meanDiff: number;
 }
 
 export interface TrialQueueItem {
@@ -309,6 +468,8 @@ export interface SpeciesResearchCacheStatus {
 
 export interface DashboardData {
   batch: ImportBatchSummary | null;
+  batches?: ImportBatchSummary[];
+  scope?: AnalysisScope | null;
   metrics: {
     trials: number;
     accessions: number;
@@ -320,6 +481,7 @@ export interface DashboardData {
   treatmentSummaries: TreatmentSummary[];
   speciesSummaries: SpeciesSummary[];
   pairedComparisons: PairedComparison[];
+  advancedComparisons?: AdvancedComparison[];
   trialQueue: TrialQueueItem[];
   dataQualityIssues: DataQualityIssue[];
   askSuggestions: string[];

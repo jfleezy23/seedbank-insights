@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   AlertCircle,
   BarChart3,
   BrainCircuit,
   CircleHelp,
   Database,
+  Download,
   ExternalLink,
   FileSpreadsheet,
   FlaskConical,
@@ -30,7 +31,15 @@ import { PairedComparisonPanel } from "./components/PairedComparisonPanel";
 import { TreatmentChart } from "./components/TreatmentChart";
 import { TrialQueueTable } from "./components/TrialQueueTable";
 import { buildSpeciesResourceLinks } from "./core/speciesResources";
-import type { DashboardData, SpeciesResearchResult, SpeciesSummary } from "./core/types";
+import type {
+  DashboardData,
+  DatasetState,
+  ImportPreview,
+  PropaguleType,
+  SpeciesResearchResult,
+  SpeciesSummary,
+  TreatmentCodebookEntry
+} from "./core/types";
 import "./App.css";
 
 const navItems = [
@@ -38,6 +47,7 @@ const navItems = [
   { label: "Insight Board", icon: BarChart3 },
   { label: "Species Explorer", icon: Leaf },
   { label: "Treatment Comparator", icon: FlaskConical },
+  { label: "Advanced Analysis", icon: Microscope },
   { label: "Trial Queue", icon: Database },
   { label: "Data Quality", icon: AlertCircle },
   { label: "Ask", icon: MessageSquareText },
@@ -677,8 +687,161 @@ function SettingsModal({
   );
 }
 
+function DatasetManager({
+  dataset,
+  previews,
+  codebook,
+  busy,
+  onPreview,
+  onCommit,
+  onCheckUpdate,
+  onRelink,
+  onSelectScope,
+  onCreateCombinedScope,
+  onSaveCodebook
+}: {
+  dataset: DatasetState;
+  previews: ImportPreview[];
+  codebook: TreatmentCodebookEntry[];
+  busy: boolean;
+  onPreview: () => void;
+  onCommit: () => void;
+  onCheckUpdate: (sourceId: number) => void;
+  onRelink: (sourceId: number) => void;
+  onSelectScope: (scopeId: number) => void;
+  onCreateCombinedScope: () => void;
+  onSaveCodebook: (entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">) => void;
+}) {
+  const [propaguleType, setPropaguleType] = useState<PropaguleType>("seed");
+  const [token, setToken] = useState("");
+  const [label, setLabel] = useState("");
+  const [meaning, setMeaning] = useState("");
+  const activeScope = dataset.scopes.find((scope) => scope.id === dataset.activeScopeId);
+
+  function submitCodebook(event: FormEvent) {
+    event.preventDefault();
+    if (!token.trim() || !label.trim() || !meaning.trim()) return;
+    onSaveCodebook({ version: 0, propaguleType, token, label, meaning, active: true });
+    setToken("");
+    setLabel("");
+    setMeaning("");
+  }
+
+  return (
+    <section className="view-stack">
+      <section className="panel import-panel">
+        <div className="panel-heading">
+          <div>
+            <h2>Dataset Manager</h2>
+            <p>Synced workbook files remain the source of truth. Imports are immutable and require preview.</p>
+          </div>
+          <span className="scope-chip">Scope: {activeScope?.name ?? "None"}</span>
+        </div>
+        <div className="import-actions">
+          <button type="button" onClick={onPreview} disabled={busy}>
+            <FileSpreadsheet size={17} /> Register or preview files
+          </button>
+          <button type="button" onClick={onCreateCombinedScope} disabled={busy || dataset.sources.length < 2}>
+            Combine latest cohorts
+          </button>
+        </div>
+        <div className="dataset-grid">
+          <div>
+            <h3>Registered sources</h3>
+            {dataset.sources.length ? dataset.sources.map((source) => (
+              <article className="dataset-row" key={source.id}>
+                <div><strong>{source.label}</strong><small>{source.canonicalPath}</small></div>
+                <div className="import-actions"><button type="button" onClick={() => onCheckUpdate(source.id)} disabled={busy}>Check for updates</button><button type="button" onClick={() => onRelink(source.id)} disabled={busy}>Relink</button></div>
+              </article>
+            )) : <p>No workbook sources registered.</p>}
+          </div>
+          <div>
+            <h3>Analysis scope</h3>
+            <select
+              aria-label="Active analysis scope"
+              value={dataset.activeScopeId ?? ""}
+              onChange={(event) => onSelectScope(Number(event.target.value))}
+              disabled={busy || !dataset.scopes.length}
+            >
+              {!dataset.scopes.length ? <option value="">No scopes</option> : null}
+              {dataset.scopes.map((scope) => (
+                <option value={scope.id} key={scope.id}>{scope.name}{scope.isCombined ? " · combined" : ""}</option>
+              ))}
+            </select>
+            <p>Changing scope is explicit and never happens during import.</p>
+          </div>
+        </div>
+      </section>
+
+      {previews.length ? (
+        <section className="panel">
+          <div className="panel-heading"><div><h2>Import compatibility preview</h2><p>Review every file before creating immutable versions.</p></div></div>
+          <div className="preview-grid">
+            {previews.map((preview) => (
+              <article className="preview-card" key={preview.token}>
+                <strong>{preview.filename}</strong>
+                <span>{preview.worksheetName} · {preview.populatedRows} populated rows</span>
+                <dl>
+                  <div><dt>Accepted</dt><dd>{preview.acceptedRows}</dd></div>
+                  <div><dt>Quarantined</dt><dd>{preview.quarantinedRows.length}</dd></div>
+                  <div><dt>Warnings</dt><dd>{preview.issues.length}</dd></div>
+                </dl>
+                {preview.duplicateCandidates.length ? <p>{preview.duplicateCandidates.length} ambiguous duplicate rows require classification.</p> : null}
+                {preview.unchangedSourceId ? <p>Content matches an existing source version; committing creates no duplicate.</p> : null}
+                {preview.quarantinedRows.length ? <p>{preview.quarantinedRows.slice(0, 3).map((row) => `Row ${row.sourceRow}: ${row.reasons.join(", ")}`).join(" · ")}</p> : null}
+              </article>
+            ))}
+          </div>
+          <button type="button" className="primary" onClick={onCommit} disabled={busy}>Import reviewed versions</button>
+        </section>
+      ) : null}
+
+      <section className="panel">
+        <div className="panel-heading"><div><h2>Treatment codebook</h2><p>Unknown tokens remain descriptive-only until explicitly documented.</p></div><span>{codebook.length} entries</span></div>
+        <form className="codebook-form" onSubmit={submitCodebook}>
+          <select value={propaguleType} onChange={(event) => setPropaguleType(event.target.value as PropaguleType)}>
+            <option value="seed">Seed</option><option value="stem_cutting">Stem cutting</option><option value="division">Division</option>
+          </select>
+          <input value={token} onChange={(event) => setToken(event.target.value)} placeholder="Token" />
+          <input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Label" />
+          <input value={meaning} onChange={(event) => setMeaning(event.target.value)} placeholder="Documented meaning" />
+          <button type="submit" disabled={busy}>Save new version</button>
+        </form>
+      </section>
+    </section>
+  );
+}
+
+function AdvancedAnalysis({ dashboard, busy, onExport }: { dashboard: DashboardData; busy: boolean; onExport: () => void }) {
+  const rows = dashboard.advancedComparisons ?? [];
+  return (
+    <section className="view-stack">
+      <section className="panel">
+        <div className="panel-heading"><div><h2>Advanced Analysis</h2><p>Completed trials only; species-clustered uncertainty and Holm-adjusted exact sign tests.</p></div><div className="import-actions"><span className="scope-chip">{dashboard.scope?.name ?? dashboard.batch?.filename ?? "No scope"}</span><button type="button" onClick={onExport} disabled={busy || !dashboard.scope}><Download size={16} /> Export reproducible files</button></div></div>
+        <div className="table-scroll">
+          <table className="advanced-table">
+            <thead><tr><th>Propagule</th><th>Contrast</th><th>Pairs / species</th><th>W / T / L</th><th>Species effect</th><th>95% clustered CI</th><th>Adjusted p</th><th>Evidence</th></tr></thead>
+            <tbody>{rows.map((row) => (
+              <tr key={row.id}>
+                <td>{row.propaguleType.replace("_", " ")}</td><td>{row.treatment} vs {row.baseline}</td>
+                <td>{row.pairCount} / {row.speciesCount}</td><td>{row.wins} / {row.ties} / {row.losses}</td>
+                <td>{row.speciesMeanDiff.toFixed(2)}</td><td>{row.ciLow.toFixed(2)} to {row.ciHigh.toFixed(2)}</td>
+                <td>{row.adjustedPValue === null ? "suppressed" : row.adjustedPValue.toFixed(4)}</td><td><ConfidenceBadge label={row.confidence} /></td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>
+        {!rows.length ? <p>No eligible completed treatment contrasts in this scope.</p> : null}
+      </section>
+    </section>
+  );
+}
+
 function App() {
   const [dashboard, setDashboard] = useState<DashboardData>(emptyDashboard);
+  const [dataset, setDataset] = useState<DatasetState>({ sources: [], scopes: [], activeScopeId: null });
+  const [importPreviews, setImportPreviews] = useState<ImportPreview[]>([]);
+  const [codebook, setCodebook] = useState<TreatmentCodebookEntry[]>([]);
   const [selectedNav, setSelectedNav] = useState<NavLabel>("Insight Board");
   const [loading, setLoading] = useState(false);
   const [aiConfigured, setAiConfigured] = useState(false);
@@ -724,13 +887,17 @@ function App() {
     let cancelled = false;
     async function load() {
       if (!window.seedbank) return;
-      const [status, current] = await Promise.all([
+      const [status, current, datasetState, treatmentCodebook] = await Promise.all([
         window.seedbank.getOpenAiStatus(),
-        window.seedbank.getDashboard()
+        window.seedbank.getDashboard(),
+        window.seedbank.getDataset?.() ?? Promise.resolve({ sources: [], scopes: [], activeScopeId: null }),
+        window.seedbank.getTreatmentCodebook?.() ?? Promise.resolve([])
       ]);
       if (cancelled) return;
       setAiConfigured(status.configured);
       setSafeStorageAvailable(status.safeStorageAvailable);
+      setDataset(datasetState);
+      setCodebook(treatmentCodebook);
       applyDashboard(current);
       if (current.batch) {
         setMessage(`Loaded ${current.batch.filename} from local SQLite.`);
@@ -748,7 +915,9 @@ function App() {
 
   const bestComparison = dashboard.pairedComparisons[0];
   const donePercent = Math.round(dashboard.metrics.doneRate * 100);
-  const batchLabel = dashboard.batch?.filename ?? "No workbook imported";
+  const batchLabel = dashboard.scope
+    ? `${dashboard.scope.name} · ${dashboard.scope.isCombined ? `${dashboard.scope.batchIds.length} cohorts` : "individual cohort"}`
+    : dashboard.batch?.filename ?? "No workbook imported";
   const busy = loading || savingKey;
   const researchCacheStatus = dashboard.speciesResearchCacheStatus;
   const activeSessionResearchCount = Object.keys(speciesResearchResults).filter((key) =>
@@ -796,18 +965,126 @@ function App() {
   async function importWorkbook() {
     if (!window.seedbank || busy) return;
     setLoading(true);
-    setMessage("Importing workbook and recomputing deterministic insights...");
+    setMessage("Reading selected workbooks for compatibility preview...");
     try {
-      const next = await window.seedbank.selectWorkbook();
-      if (next) {
-        applyDashboard(next);
-        setAiConfigured(next.aiInsightStatus.configured);
-        setMessage(`Imported ${next.batch?.filename ?? "workbook"}. ${next.aiInsightStatus.message}`);
+      const previews = await window.seedbank.previewWorkbooks();
+      if (previews.length) {
+        setImportPreviews(previews);
+        setSelectedNav("Imports");
+        setMessage(`Previewed ${previews.length} workbook${previews.length === 1 ? "" : "s"}; review before importing.`);
       } else {
-        setMessage("Import canceled.");
+        setMessage("Preview canceled.");
       }
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Import failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function commitImportPreviews() {
+    if (!window.seedbank || busy || !importPreviews.length) return;
+    setLoading(true);
+    setMessage("Creating reviewed immutable workbook versions...");
+    try {
+      const response = await window.seedbank.commitImportPreviews(importPreviews.map((preview) => preview.token));
+      setDataset(response.dataset);
+      applyDashboard(response.dashboard);
+      setImportPreviews([]);
+      setMessage("Imports committed. The active analysis scope was not changed.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Import commit failed.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function checkWorkbookUpdate(sourceId: number) {
+    if (!window.seedbank || busy) return;
+    setLoading(true);
+    try {
+      const preview = await window.seedbank.checkWorkbookUpdate(sourceId);
+      setImportPreviews([preview]);
+      setMessage(preview.unchangedSourceId ? "The synced file is unchanged." : "A changed workbook version is ready for review.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to check the workbook.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function relinkWorkbookSource(sourceId: number) {
+    if (!window.seedbank || busy) return;
+    setLoading(true);
+    try {
+      const preview = await window.seedbank.relinkWorkbookSource(sourceId);
+      if (preview) {
+        setImportPreviews([preview]);
+        setDataset(await window.seedbank.getDataset());
+        setMessage("Workbook source relinked. Review the file before importing its content.");
+      } else {
+        setMessage("Relink canceled.");
+      }
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to relink the workbook source.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function selectAnalysisScope(scopeId: number) {
+    if (!window.seedbank || busy || !scopeId) return;
+    setLoading(true);
+    try {
+      const response = await window.seedbank.setAnalysisScope(scopeId);
+      setDataset(response.dataset);
+      applyDashboard(response.dashboard);
+      setMessage(`Active analysis scope: ${response.dashboard.scope?.name ?? "selected cohort"}.`);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to select analysis scope.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function createCombinedScope() {
+    if (!window.seedbank || busy) return;
+    const batchIds = dataset.sources.map((source) => source.latestBatchId).filter((id): id is number => id !== null);
+    if (batchIds.length < 2) return;
+    setLoading(true);
+    try {
+      const response = await window.seedbank.createAnalysisScope("Combined latest cohorts", batchIds);
+      setDataset(response.dataset);
+      applyDashboard(response.dashboard);
+      setMessage("Combined scope created and selected explicitly.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to create combined scope.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function saveCodebookEntry(entry: Omit<TreatmentCodebookEntry, "id" | "builtIn">) {
+    if (!window.seedbank || busy) return;
+    setLoading(true);
+    try {
+      setCodebook(await window.seedbank.saveTreatmentCodebookEntry(entry));
+      setMessage("Treatment codebook version saved. Re-preview a source to rerun eligibility.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Unable to save the codebook entry.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  async function exportAdvancedAnalysis() {
+    if (!window.seedbank || busy) return;
+    setLoading(true);
+    try {
+      const result = await window.seedbank.exportAdvancedAnalysis();
+      setMessage(result ? `Exported pair, species, and manifest files to ${result.directory}.` : "Export canceled.");
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "Advanced analysis export failed.");
     } finally {
       setLoading(false);
     }
@@ -1057,10 +1334,6 @@ function App() {
             <p>{batchLabel}</p>
           </div>
           <div className="topbar-actions">
-            <button type="button" onClick={importLocalDefault} disabled={busy}>
-              <Search size={17} />
-              Load local workbook
-            </button>
             <button className="primary" type="button" onClick={importWorkbook} disabled={busy}>
               <FileSpreadsheet size={17} />
               Import spreadsheet
@@ -1072,28 +1345,19 @@ function App() {
         </header>
 
         {selectedNav === "Imports" && (
-          <section className="view-stack">
-            <section className="panel import-panel">
-              <div className="panel-heading">
-                <div>
-                  <h2>Spreadsheet imports</h2>
-                  <p>{message}</p>
-                </div>
-                <AiStatusPill dashboard={dashboard} />
-              </div>
-              <div className="import-actions">
-                <button type="button" onClick={importLocalDefault} disabled={busy}>
-                  <Search size={17} />
-                  Load local workbook
-                </button>
-                <button type="button" onClick={importWorkbook} disabled={busy}>
-                  <FileSpreadsheet size={17} />
-                  Import spreadsheet
-                </button>
-              </div>
-            </section>
-            {metrics}
-          </section>
+          <DatasetManager
+            dataset={dataset}
+            previews={importPreviews}
+            codebook={codebook}
+            busy={busy}
+            onPreview={importWorkbook}
+            onCommit={commitImportPreviews}
+            onCheckUpdate={checkWorkbookUpdate}
+            onRelink={relinkWorkbookSource}
+            onSelectScope={selectAnalysisScope}
+            onCreateCombinedScope={createCombinedScope}
+            onSaveCodebook={saveCodebookEntry}
+          />
         )}
 
         {selectedNav === "Insight Board" && (
@@ -1121,6 +1385,10 @@ function App() {
             <PairedComparisonPanel comparisons={dashboard.pairedComparisons} />
             <TreatmentChart summaries={dashboard.treatmentSummaries} />
           </section>
+        )}
+
+        {selectedNav === "Advanced Analysis" && (
+          <AdvancedAnalysis dashboard={dashboard} busy={busy} onExport={exportAdvancedAnalysis} />
         )}
 
         {selectedNav === "Trial Queue" && (
