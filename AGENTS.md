@@ -33,6 +33,8 @@ Do not claim SCA, tests, build, or review passed unless they actually ran and th
 
 For desktop apps, packaging is not launch verification. Before claiming a packaged app works, run the packaged executable/app bundle itself, observe that the main window loads, and capture or inspect evidence from the launched app. `electron-builder --dir` only proves packaging completed; it does not prove the app starts.
 
+After implementation work is completed, an unpacked packaged build is required for human testing and verification. Do not hand off source-only work as complete when the user needs to test the desktop app. Build the current revision, launch-smoke the packaged app, and report the exact artifact path and hash.
+
 For human-review checkpoints, build and hand off the unpacked packaged app only. Installer artifacts such as Windows NSIS setup files or macOS DMGs are release artifacts; do not build, upload, or present them as candidates until the user explicitly confirms human testing passed and asks for release packaging.
 
 ## Release Review Cycle
