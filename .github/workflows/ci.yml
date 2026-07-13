@@ -29,6 +29,7 @@ jobs:
           node-version: 22
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      - run: pnpm run verify:agent-docs
       - run: pnpm run workflow:lint
       - run: pnpm run secret:scan
       - run: pnpm run secret:gitleaks
