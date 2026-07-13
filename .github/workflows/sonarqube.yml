@@ -47,7 +47,7 @@ jobs:
 
       - name: Checkout requested ref
         if: steps.checkout_ref.outputs.ref != ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ steps.checkout_ref.outputs.ref }}
           fetch-depth: 0
@@ -55,7 +55,7 @@ jobs:
 
       - name: Checkout
         if: steps.checkout_ref.outputs.ref == ''
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
