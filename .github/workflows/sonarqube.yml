@@ -5,6 +5,15 @@ on:
     branches: [main]
   pull_request:
   workflow_dispatch:
+    inputs:
+      checkout_ref:
+        description: "Optional branch, tag, or SHA to scan instead of the workflow ref."
+        required: false
+        type: string
+      sonar_branch:
+        description: "Optional Sonar branch label for a manual checkout_ref scan."
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -19,7 +28,28 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Resolve checkout ref
+        id: checkout_ref
+        env:
+          CHECKOUT_REF: ${{ inputs.checkout_ref }}
+        run: |
+          if [ -n "$CHECKOUT_REF" ]; then
+            echo "ref=$CHECKOUT_REF" >> "$GITHUB_OUTPUT"
+            echo "::notice::Scanning requested source ref: $CHECKOUT_REF"
+          else
+            echo "ref=" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Checkout requested ref
+        if: steps.checkout_ref.outputs.ref != ''
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ steps.checkout_ref.outputs.ref }}
+          fetch-depth: 0
+          persist-credentials: false
+
       - name: Checkout
+        if: steps.checkout_ref.outputs.ref == ''
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
@@ -29,6 +59,8 @@ jobs:
         id: sonar_config
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+          CHECKOUT_REF: ${{ steps.checkout_ref.outputs.ref }}
+          SONAR_BRANCH: ${{ inputs.sonar_branch }}
         run: |
           if [ -z "$SONAR_TOKEN" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -50,6 +82,21 @@ jobs:
           echo "organization=$organization" >> "$GITHUB_OUTPUT"
           echo "project_key=$project_key" >> "$GITHUB_OUTPUT"
 
+          extra_args="-Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300"
+
+          if [ -n "$CHECKOUT_REF" ]; then
+            branch_name="$SONAR_BRANCH"
+            if [ -z "$branch_name" ]; then
+              safe_ref="$(printf '%s' "$CHECKOUT_REF" | tr -c '[:alnum:]._-' '-')"
+              branch_name="manual-$safe_ref"
+            fi
+
+            echo "::notice::Reporting manual source scan to Sonar branch: $branch_name"
+            extra_args="$extra_args -Dsonar.branch.name=$branch_name"
+          fi
+
+          echo "extra_args=$extra_args" >> "$GITHUB_OUTPUT"
+
       - name: SonarQube scan
         if: steps.sonar_config.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-scan-action@v7
@@ -59,3 +106,4 @@ jobs:
           args: >
             -Dsonar.organization=${{ steps.sonar_config.outputs.organization }}
             -Dsonar.projectKey=${{ steps.sonar_config.outputs.project_key }}
+            ${{ steps.sonar_config.outputs.extra_args }}
