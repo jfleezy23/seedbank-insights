@@ -40,10 +40,13 @@ Required checks should include the main CI workflow once it is green on GitHub.
 - `pnpm run build` typechecks and builds renderer plus Electron main/preload.
 - `pnpm run sca` runs package vulnerability audit.
 - `pnpm run app:build` and `pnpm run app:smoke` validate unpacked packaged desktop wiring, but manual launched-app evidence is still required before release claims.
+- `pnpm run verify:quick`, `pnpm run verify:full`, `pnpm run verify:workflow`, and `pnpm run verify:release` package the standard gates as commands instead of relying on agent memory.
+- `pnpm run release:preflight` checks release readiness without creating artifacts.
+- `pnpm run verify:windows-signing-env` checks the Windows signing toolchain without signing anything.
 
 Local real-workbook acceptance is not a CI gate because the source workbooks are private. When available, run Vitest with `WORKBOOK_IMPORT_TEST_PATH` and `READY_WORKBOOK_IMPORT_TEST_PATH` pointing at local synced workbook copies. The v0.4 source acceptance result is 128 analyzable original trials and 2,204 populated / 2,166 analyzable / 38 quarantined larger-workbook rows.
 
-Release-impacting work also requires a read-only AGY review with Gemini 3.5 Flash High. AGY is advisory; every comment must be adjudicated and validated fixes must be retested.
+Release-impacting work also requires a read-only AGY review with Gemini 3.5 Flash High. AGY is advisory; every comment must be adjudicated and validated fixes must be retested. Claude Sonnet through AGY is reserved for targeted UI/layout review when needed.
 
 ## Workflow Hygiene
 

@@ -1,8 +1,8 @@
-import { spawnSync } from "node:child_process";
+import process from "node:process";
+import { spawnPnpm } from "./spawn-utils.mjs";
 
-const result = spawnSync("pnpm", ["audit", "--audit-level", "moderate"], {
-  stdio: "inherit",
-  shell: process.platform === "win32"
+const result = spawnPnpm(["audit", "--audit-level", "moderate"], {
+  stdio: "inherit"
 });
 
 if (result.error) {

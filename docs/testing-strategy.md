@@ -1,6 +1,12 @@
 # Testing Strategy
 
-SeedBank Insights uses layered checks so import correctness, desktop launch behavior, and public-repo hygiene fail early.
+SeedBank Insights uses layered checks so import correctness, desktop launch behavior, and public-repo hygiene fail early. Prefer the scripted gates so validation does not depend on agent memory:
+
+```sh
+pnpm run verify:quick
+pnpm run verify:full
+pnpm run verify:workflow
+```
 
 ## Unit And Integration Tests
 

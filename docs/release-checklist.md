@@ -11,24 +11,30 @@ For review checkpoints, hand off an unpacked packaged app only. Installer artifa
 - Confirm `.env`, `.env.*`, SQLite files, logs, `dist/`, `dist-electron/`, `release/`, `playwright-report/`, and `test-results/` are not staged.
 - Run a filename-only or redacted secret scan before pushing.
 - If OpenAI behavior changed, verify the renderer still receives only narrow IPC results and never stores API keys.
-- Confirm documentation says this is independent from Frame Player and does not imply affiliation.
+- Confirm documentation does not imply affiliation with unrelated products, institutions, or projects.
 - Confirm documentation and release notes describe new validation gates, migration behavior, or user-visible import/statistical changes.
 
 ## Validation Gate
 
-Run the focused checks for the changed path first, then run the broader gate when shared behavior or publication files changed:
+Run the focused checks for the changed path first, then use the scripted gates so agents do not improvise from memory:
 
 ```sh
-pnpm run workflow:lint
-pnpm run secret:scan
-pnpm run secret:gitleaks
-pnpm run lint
-pnpm run typecheck
-pnpm run test
-pnpm run test:ui
-pnpm run db:smoke
-pnpm run build
-pnpm run sca
+pnpm run verify:quick
+pnpm run verify:full
+pnpm run verify:workflow
+```
+
+For release candidates, run:
+
+```sh
+pnpm run release:preflight -- --version <version> --tag <release-tag>
+pnpm run verify:release -- --version <version> --tag <release-tag>
+```
+
+For Windows signing environment checks without building a release:
+
+```sh
+pnpm run verify:windows-signing-env
 ```
 
 For local real-workbook acceptance, keep the raw files out of git and run:
@@ -62,7 +68,7 @@ On Windows review builds, hand off the unpacked app under `release/win-unpacked/
 
 ## Independent Review Gate
 
-Release-impacting changes require a read-only AGY review using Gemini 3.5 Flash High. AGY is advisory, not authoritative, but every comment must be adjudicated.
+Release-impacting changes require a read-only AGY review using Gemini 3.5 Flash High. AGY is advisory, not authoritative, but every comment must be adjudicated. Use Claude Sonnet through AGY only for targeted React/UI interaction or layout questions when the extra cost is justified.
 
 Use a code-only prompt. Do not ask AGY to analyze screenshots, edit files, commit, push, merge, publish, or change GitHub state.
 
