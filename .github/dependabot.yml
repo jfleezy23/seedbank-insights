@@ -9,6 +9,12 @@ updates:
       time: "09:00"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 2
+    ignore:
+      # Major dependency jumps are not routine maintenance. Let humans plan
+      # those on a normal feature branch with targeted compatibility testing.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       production-dependencies:
         dependency-type: production
@@ -27,6 +33,12 @@ updates:
       time: "09:30"
       timezone: America/Los_Angeles
     open-pull-requests-limit: 1
+    ignore:
+      # Major Action upgrades can change runner/runtime behavior. Keep them
+      # deliberate; routine Dependabot branches are for minor/patch updates.
+      - dependency-name: "*"
+        update-types:
+          - version-update:semver-major
     groups:
       github-actions:
         patterns:
