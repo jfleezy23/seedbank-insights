@@ -96,9 +96,11 @@ jobs:
             project_key="${{ github.repository_owner }}_${{ github.event.repository.name }}"
           fi
 
-          echo "enabled=true" >> "$GITHUB_OUTPUT"
-          echo "organization=$organization" >> "$GITHUB_OUTPUT"
-          echo "project_key=$project_key" >> "$GITHUB_OUTPUT"
+          {
+            echo "enabled=true"
+            echo "organization=$organization"
+            echo "project_key=$project_key"
+          } >> "$GITHUB_OUTPUT"
 
           extra_args="-Dsonar.scm.revision=$SCANNED_SHA"
           quality_gate_enforced="false"
@@ -130,10 +132,12 @@ jobs:
             dashboard_url="https://sonarcloud.io/dashboard?id=$project_key&branch=$sonar_target"
           fi
 
-          echo "extra_args=$extra_args" >> "$GITHUB_OUTPUT"
-          echo "quality_gate_enforced=$quality_gate_enforced" >> "$GITHUB_OUTPUT"
-          echo "sonar_target=$sonar_target" >> "$GITHUB_OUTPUT"
-          echo "dashboard_url=$dashboard_url" >> "$GITHUB_OUTPUT"
+          {
+            echo "extra_args=$extra_args"
+            echo "quality_gate_enforced=$quality_gate_enforced"
+            echo "sonar_target=$sonar_target"
+            echo "dashboard_url=$dashboard_url"
+          } >> "$GITHUB_OUTPUT"
 
       - name: SonarQube scan
         id: sonar_scan
