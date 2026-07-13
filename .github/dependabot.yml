@@ -2,12 +2,14 @@ version: 2
 updates:
   - package-ecosystem: npm
     directory: /
+    # Policy: no routine version-bump PR branches. SCA, dependency review,
+    # and human release prep decide when dependency upgrades are worth taking.
     schedule:
       interval: weekly
       day: monday
       time: "09:00"
       timezone: America/Los_Angeles
-    open-pull-requests-limit: 5
+    open-pull-requests-limit: 0
     groups:
       production-dependencies:
         dependency-type: production
@@ -16,9 +18,11 @@ updates:
 
   - package-ecosystem: github-actions
     directory: /
+    # Policy: no routine version-bump PR branches for Actions either.
+    # Upgrade Actions deliberately during GitHub maintenance work.
     schedule:
       interval: weekly
       day: monday
       time: "09:30"
       timezone: America/Los_Angeles
-    open-pull-requests-limit: 3
+    open-pull-requests-limit: 0

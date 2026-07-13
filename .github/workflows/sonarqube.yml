@@ -139,7 +139,7 @@ jobs:
       - name: SonarQube scan
         id: sonar_scan
         if: steps.sonar_config.outputs.enabled == 'true'
-        uses: SonarSource/sonarqube-scan-action@v7
+        uses: SonarSource/sonarqube-scan-action@v8
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
