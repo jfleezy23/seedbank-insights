@@ -75,6 +75,10 @@ jobs:
           SONAR_BRANCH: ${{ inputs.sonar_branch }}
           SCANNED_SHA: ${{ steps.scanned_commit.outputs.sha }}
           ENFORCE_QUALITY_GATE: ${{ inputs.enforce_quality_gate }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
+          GITHUB_HEAD_REF: ${{ github.head_ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ -z "$SONAR_TOKEN" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -97,9 +101,11 @@ jobs:
           echo "project_key=$project_key" >> "$GITHUB_OUTPUT"
 
           extra_args="-Dsonar.scm.revision=$SCANNED_SHA"
+          quality_gate_enforced="false"
 
           if [ "$ENFORCE_QUALITY_GATE" = "true" ]; then
             extra_args="$extra_args -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300"
+            quality_gate_enforced="true"
             echo "::notice::Sonar quality-gate enforcement is enabled for this run."
           else
             echo "::notice::Sonar quality-gate enforcement is disabled for this run."
@@ -114,11 +120,23 @@ jobs:
 
             echo "::notice::Reporting manual source scan to Sonar branch: $branch_name"
             extra_args="$extra_args -Dsonar.branch.name=$branch_name"
+            sonar_target="$branch_name"
+            dashboard_url="https://sonarcloud.io/dashboard?id=$project_key&branch=$branch_name"
+          elif [ "$GITHUB_EVENT_NAME" = "pull_request" ] && [ -n "$PR_NUMBER" ]; then
+            sonar_target="pull request #$PR_NUMBER"
+            dashboard_url="https://sonarcloud.io/dashboard?id=$project_key&pullRequest=$PR_NUMBER"
+          else
+            sonar_target="${GITHUB_REF_NAME:-main}"
+            dashboard_url="https://sonarcloud.io/dashboard?id=$project_key&branch=$sonar_target"
           fi
 
           echo "extra_args=$extra_args" >> "$GITHUB_OUTPUT"
+          echo "quality_gate_enforced=$quality_gate_enforced" >> "$GITHUB_OUTPUT"
+          echo "sonar_target=$sonar_target" >> "$GITHUB_OUTPUT"
+          echo "dashboard_url=$dashboard_url" >> "$GITHUB_OUTPUT"
 
       - name: SonarQube scan
+        id: sonar_scan
         if: steps.sonar_config.outputs.enabled == 'true'
         uses: SonarSource/sonarqube-scan-action@v7
         env:
@@ -128,3 +146,28 @@ jobs:
             -Dsonar.organization=${{ steps.sonar_config.outputs.organization }}
             -Dsonar.projectKey=${{ steps.sonar_config.outputs.project_key }}
             ${{ steps.sonar_config.outputs.extra_args }}
+
+      - name: SonarQube internal gate summary
+        if: always() && steps.sonar_config.outputs.enabled == 'true'
+        env:
+          DASHBOARD_URL: ${{ steps.sonar_config.outputs.dashboard_url }}
+          ORGANIZATION: ${{ steps.sonar_config.outputs.organization }}
+          PROJECT_KEY: ${{ steps.sonar_config.outputs.project_key }}
+          QUALITY_GATE_ENFORCED: ${{ steps.sonar_config.outputs.quality_gate_enforced }}
+          SCAN_OUTCOME: ${{ steps.sonar_scan.outcome }}
+          SCANNED_SHA: ${{ steps.scanned_commit.outputs.sha }}
+          SONAR_TARGET: ${{ steps.sonar_config.outputs.sonar_target }}
+        run: |
+          {
+            echo "## SonarQube internal gate"
+            echo
+            echo "- Scanner step outcome: \`$SCAN_OUTCOME\`"
+            echo "- Organization: \`$ORGANIZATION\`"
+            echo "- Project key: \`$PROJECT_KEY\`"
+            echo "- Source commit: \`$SCANNED_SHA\`"
+            echo "- Sonar target: \`$SONAR_TARGET\`"
+            echo "- Dashboard: [$SONAR_TARGET]($DASHBOARD_URL)"
+            echo "- Sonar quality-gate readback enforced: \`$QUALITY_GATE_ENFORCED\`"
+            echo
+            echo "Internal policy: merges and releases require this Sonar analysis workflow to complete successfully and the dashboard feedback to be reviewed. SonarCloud quality-gate readback remains optional on the free tier because it requires project Browse access for the token."
+          } >> "$GITHUB_STEP_SUMMARY"

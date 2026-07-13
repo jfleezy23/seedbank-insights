@@ -32,6 +32,20 @@ Every implementation checkpoint must end with:
 
 Do not claim SCA, tests, build, or review passed unless they actually ran and the output was checked.
 
+## SonarCloud Free-Tier Internal Gate
+
+- This repo uses SonarQube Cloud on the free tier for advisory merge and release feedback. Do not upgrade, add paid seats, or require paid/private-enterprise Sonar behavior unless the user explicitly approves.
+- The internal Sonar gate is the GitHub `SonarQube` workflow completing successfully and producing a dashboard link in the job summary. Review that dashboard feedback for merges and releases; do not claim Sonar was checked from a green GitHub check alone without opening or recording the run/dashboard evidence.
+- Do not enable `sonar.qualitygate.wait=true` by default. Sonar quality-gate readback requires the token to have project `Browse` access in addition to analysis/upload permission; on the free tier this is optional and must not become a hidden release blocker.
+- If the user confirms that the existing free-tier account/token has the needed access, the workflow's manual `enforce_quality_gate=true` input may be used for a stricter one-off check. If it fails with `Not authorized or project not found`, treat that as a Sonar permission/readback limitation, not a code-quality failure.
+- For release-source feedback, scan the exact tag or commit from `main` without changing source:
+
+```powershell
+gh workflow run .github/workflows/sonarqube.yml --repo jfleezy23/seedbank-insights --ref main -f checkout_ref=v.4 -f sonar_branch=release-v.4 -f enforce_quality_gate=false
+```
+
+- Record the GitHub Actions run URL, the scanned source commit, and the Sonar dashboard URL in release notes or handoff notes when Sonar feedback is part of release validation.
+
 For desktop apps, packaging is not launch verification. Before claiming a packaged app works, run the packaged executable/app bundle itself, observe that the main window loads, and capture or inspect evidence from the launched app. `electron-builder --dir` only proves packaging completed; it does not prove the app starts.
 
 After implementation work is completed, an unpacked packaged build is required for human testing and verification. Do not hand off source-only work as complete when the user needs to test the desktop app. Build the current revision, launch-smoke the packaged app, and report the exact artifact path and hash.
