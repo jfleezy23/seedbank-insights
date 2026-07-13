@@ -30,6 +30,7 @@ Use commands, not memory:
 - Full gate for shared behavior or release-impacting changes: `pnpm run verify:full`
 - Release candidate gate: `pnpm run verify:release`
 - Workflow/security/SCA gate: `pnpm run verify:workflow`
+- Agent-doc/playbook gate: `pnpm run verify:agent-docs`
 - Windows signing environment preflight: `pnpm run verify:windows-signing-env`
 - Release preflight only: `pnpm run release:preflight`
 

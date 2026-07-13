@@ -32,6 +32,7 @@ Required checks should include the main CI workflow once it is green on GitHub.
 - `pnpm run secret:scan` checks tracked and untracked non-ignored files for key-shaped values without printing the values.
 - `pnpm run secret:gitleaks` runs the open-source Gitleaks CLI against git history with redacted output.
 - `pnpm run workflow:lint` runs actionlint against GitHub Actions workflows.
+- `pnpm run verify:agent-docs` keeps the agent router/playbooks linked, small, and free of concrete private release details.
 - `pnpm run lint` enforces the configured TypeScript/React lint rules.
 - `pnpm run typecheck` runs TypeScript without emitting files.
 - `pnpm run test` runs unit and integration coverage.

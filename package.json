@@ -16,6 +16,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:ui": "playwright test",
+    "verify:agent-docs": "node scripts/check-agent-docs.mjs",
     "secret:scan": "node scripts/check-secrets.mjs",
     "secret:gitleaks": "node scripts/run-release-tool.mjs gitleaks",
     "workflow:lint": "node scripts/run-release-tool.mjs actionlint",

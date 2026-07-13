@@ -6,6 +6,7 @@ SeedBank Insights uses layered checks so import correctness, desktop launch beha
 pnpm run verify:quick
 pnpm run verify:full
 pnpm run verify:workflow
+pnpm run verify:agent-docs
 ```
 
 ## Unit And Integration Tests

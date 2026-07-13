@@ -3,6 +3,7 @@ import { spawnPnpm, spawnTool } from "./spawn-utils.mjs";
 
 const plans = {
   quick: [
+    ["pnpm", ["run", "verify:agent-docs"]],
     ["pnpm", ["run", "workflow:lint"]],
     ["pnpm", ["run", "secret:scan"]],
     ["pnpm", ["run", "lint"]],
@@ -10,12 +11,14 @@ const plans = {
     ["pnpm", ["run", "test"]]
   ],
   workflow: [
+    ["pnpm", ["run", "verify:agent-docs"]],
     ["pnpm", ["run", "workflow:lint"]],
     ["pnpm", ["run", "secret:scan"]],
     ["pnpm", ["run", "secret:gitleaks"]],
     ["pnpm", ["run", "sca"]]
   ],
   full: [
+    ["pnpm", ["run", "verify:agent-docs"]],
     ["pnpm", ["run", "workflow:lint"]],
     ["pnpm", ["run", "secret:scan"]],
     ["pnpm", ["run", "secret:gitleaks"]],
