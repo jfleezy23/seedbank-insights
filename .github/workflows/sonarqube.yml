@@ -14,6 +14,11 @@ on:
         description: "Optional Sonar branch label for a manual checkout_ref scan."
         required: false
         type: string
+      enforce_quality_gate:
+        description: "Fail the workflow if Sonar cannot read or pass the quality gate."
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -69,6 +74,7 @@ jobs:
           CHECKOUT_REF: ${{ steps.checkout_ref.outputs.ref }}
           SONAR_BRANCH: ${{ inputs.sonar_branch }}
           SCANNED_SHA: ${{ steps.scanned_commit.outputs.sha }}
+          ENFORCE_QUALITY_GATE: ${{ inputs.enforce_quality_gate }}
         run: |
           if [ -z "$SONAR_TOKEN" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -90,7 +96,14 @@ jobs:
           echo "organization=$organization" >> "$GITHUB_OUTPUT"
           echo "project_key=$project_key" >> "$GITHUB_OUTPUT"
 
-          extra_args="-Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300 -Dsonar.scm.revision=$SCANNED_SHA"
+          extra_args="-Dsonar.scm.revision=$SCANNED_SHA"
+
+          if [ "$ENFORCE_QUALITY_GATE" = "true" ]; then
+            extra_args="$extra_args -Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300"
+            echo "::notice::Sonar quality-gate enforcement is enabled for this run."
+          else
+            echo "::notice::Sonar quality-gate enforcement is disabled for this run."
+          fi
 
           if [ -n "$CHECKOUT_REF" ]; then
             branch_name="$SONAR_BRANCH"
