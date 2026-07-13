@@ -20,6 +20,7 @@ Enable these GitHub-native features when the public repository is created:
 - push protection
 - dependency graph
 - Dependabot alerts and security updates
+- Dependabot version updates for npm/pnpm dependencies and GitHub Actions
 - private vulnerability reporting
 - branch protection for `main`
 - pull requests before merge
@@ -29,6 +30,8 @@ Required checks should include the main CI workflow once it is green on GitHub.
 ## Active Local Gates
 
 - `pnpm run secret:scan` checks tracked and untracked non-ignored files for key-shaped values without printing the values.
+- `pnpm run secret:gitleaks` runs the open-source Gitleaks CLI against git history with redacted output.
+- `pnpm run workflow:lint` runs actionlint against GitHub Actions workflows.
 - `pnpm run lint` enforces the configured TypeScript/React lint rules.
 - `pnpm run typecheck` runs TypeScript without emitting files.
 - `pnpm run test` runs unit and integration coverage.
@@ -46,6 +49,7 @@ Release-impacting work also requires a read-only AGY review with Gemini 3.5 Flas
 
 - Prefer narrow `permissions` blocks.
 - Keep action versions intentional and review third-party action upgrades.
+- Keep Dependabot PR limits low enough to avoid noisy unattended churn.
 - Keep check names stable once branch protection references them.
 - Do not add CI jobs that require raw PSU project data.
 - Do not put OpenAI keys, tokens, or workbook data in repository secrets unless a workflow explicitly needs them and the user approves.

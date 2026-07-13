@@ -19,7 +19,9 @@ For review checkpoints, hand off an unpacked packaged app only. Installer artifa
 Run the focused checks for the changed path first, then run the broader gate when shared behavior or publication files changed:
 
 ```sh
+pnpm run workflow:lint
 pnpm run secret:scan
+pnpm run secret:gitleaks
 pnpm run lint
 pnpm run typecheck
 pnpm run test
@@ -98,5 +100,5 @@ Record whether each AGY comment is valid, invalid, duplicate, or needs more evid
 - Confirm the README screenshot renders on GitHub.
 - Confirm topic tags describe the project without implying institutional endorsement.
 - Confirm Issues are enabled and Projects/Wiki are disabled unless there is a maintainer reason to turn them on.
-- Confirm secret scanning, push protection, dependency alerts, and automated security fixes are enabled.
+- Confirm secret scanning, push protection, dependency alerts, automated security fixes, and Dependabot version updates are enabled.
 - Confirm the default branch is `main`.

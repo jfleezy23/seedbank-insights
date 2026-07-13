@@ -8,8 +8,10 @@
 
 - [ ] targeted tests/checks ran and are listed below
 - [ ] broader build/typecheck ran when shared behavior changed
+- [ ] `pnpm run workflow:lint` ran
 - [ ] `pnpm run sca` ran
 - [ ] `pnpm run secret:scan` ran
+- [ ] `pnpm run secret:gitleaks` ran
 - [ ] UI/layout evidence captured when UI changed
 - [ ] packaged app launched when desktop packaging changed
 

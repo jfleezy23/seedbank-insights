@@ -26,11 +26,11 @@ Every implementation checkpoint must end with:
 
 1. Targeted tests for the code path changed.
 2. Broader build/typecheck when shared behavior or runtime wiring changed.
-3. Software composition analysis (SCA), currently `pnpm run sca`.
+3. Workflow linting, secret scanning, and software composition analysis: `pnpm run workflow:lint`, `pnpm run secret:scan`, `pnpm run secret:gitleaks`, and `pnpm run sca`.
 4. Review the relevant diff before claiming completion.
 5. A concise report of what changed, what was verified, and what remains uncertain.
 
-Do not claim SCA, tests, build, or review passed unless they actually ran and the output was checked.
+Do not claim workflow lint, secret scans, SCA, tests, build, or review passed unless they actually ran and the output was checked.
 
 ## SonarCloud Free-Tier Internal Gate
 
