@@ -55,12 +55,20 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Resolve scanned commit
+        id: scanned_commit
+        run: |
+          scanned_sha="$(git rev-parse HEAD)"
+          echo "sha=$scanned_sha" >> "$GITHUB_OUTPUT"
+          echo "::notice::Scanning source commit: $scanned_sha"
+
       - name: Resolve SonarQube configuration
         id: sonar_config
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           CHECKOUT_REF: ${{ steps.checkout_ref.outputs.ref }}
           SONAR_BRANCH: ${{ inputs.sonar_branch }}
+          SCANNED_SHA: ${{ steps.scanned_commit.outputs.sha }}
         run: |
           if [ -z "$SONAR_TOKEN" ]; then
             echo "enabled=false" >> "$GITHUB_OUTPUT"
@@ -82,7 +90,7 @@ jobs:
           echo "organization=$organization" >> "$GITHUB_OUTPUT"
           echo "project_key=$project_key" >> "$GITHUB_OUTPUT"
 
-          extra_args="-Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300"
+          extra_args="-Dsonar.qualitygate.wait=true -Dsonar.qualitygate.timeout=300 -Dsonar.scm.revision=$SCANNED_SHA"
 
           if [ -n "$CHECKOUT_REF" ]; then
             branch_name="$SONAR_BRANCH"
