@@ -66,6 +66,8 @@ Then launch the packaged app bundle/executable itself and inspect evidence that 
 
 On Windows review builds, hand off the unpacked app under `release/win-unpacked/`. Do not build or attach the NSIS setup executable until the user confirms human testing passed and explicitly asks for release packaging.
 
+For public macOS release builds, follow `docs/agent-playbooks/macos-signing.md`. The app bundle and the outer DMG container must both be validated. In particular, sign the DMG after `electron-builder` creates it, notarize that signed DMG, staple the ticket, verify `spctl` acceptance on the DMG, mount the DMG, and verify the contained app with Gatekeeper before uploading assets.
+
 ## Independent Review Gate
 
 Release-impacting changes require a read-only AGY review using Gemini 3.5 Flash High. AGY is advisory, not authoritative, but every comment must be adjudicated. Use Claude Sonnet through AGY only for targeted React/UI interaction or layout questions when the extra cost is justified.

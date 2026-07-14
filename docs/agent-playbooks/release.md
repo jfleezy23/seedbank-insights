@@ -9,6 +9,8 @@ Use this playbook for CI changes, merges to `main`, release candidates, packagin
 - Packaging is not launch verification. Before claiming a packaged desktop app works, run the packaged executable/app bundle itself and inspect evidence that the main window loads.
 - If implementation work changes desktop behavior, hand off a fresh unpacked build for human testing.
 - Do not add paid release, scanning, signing, or quality-gate services unless the user explicitly approves.
+- For public macOS releases, load `docs/agent-playbooks/macos-signing.md` and follow its signing, notarization, stapling, and Gatekeeper checks. Keep concrete Apple developer details in local-only notes outside git.
+- For public Windows releases, load `docs/agent-playbooks/windows-signing.md`. Keep concrete certificate provider details in local-only notes outside git.
 
 ## Release-impacting verification
 

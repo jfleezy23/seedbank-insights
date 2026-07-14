@@ -15,6 +15,7 @@
 Load the matching playbook before acting when a task touches that area:
 
 - Release, merge, CI, Sonar, packaging, AGY review, or public artifacts: `docs/agent-playbooks/release.md`
+- macOS release signing, notarization, stapling, or Gatekeeper checks: `docs/agent-playbooks/macos-signing.md`
 - Windows release signing or certificate/tooling checks: `docs/agent-playbooks/windows-signing.md`
 - UI, React layout, screenshots, visual polish, or app usability: `docs/agent-playbooks/ui-review.md`
 - Workbook import, raw data, provenance, local database, or data-quality behavior: `docs/agent-playbooks/data-imports.md`
